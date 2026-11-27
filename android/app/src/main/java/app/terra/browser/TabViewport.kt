@@ -14,7 +14,6 @@ import android.view.ViewGroup
 import android.view.animation.PathInterpolator
 import android.webkit.WebView
 import android.widget.FrameLayout
-import android.widget.ImageView
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
@@ -212,37 +211,52 @@ internal class TabViewport(context: Context, private val glass: WebGlassCapture,
     private var incoming: WebView? = null
     private var animation: ValueAnimator? = null
     private val settle = PathInterpolator(.2f, .85f, .25f, 1f)
-    private var linkSource: ImageView? = null
+    private var linkSource: Bitmap? = null
+    private val linkPaint = Paint(Paint.FILTER_BITMAP_FLAG)
+    private var linkFade: ValueAnimator? = null
+    private val expireLinkSource = Runnable { clearLinkSource() }
 
     fun holdLinkSource(page: WebView) {
         clearLinkSource()
         if (front !== page || !isAttachedToWindow) return
         images.remove(page)
-        val frame = image(page) ?: return
-        val source = ImageView(context).apply {
-            scaleType = ImageView.ScaleType.FIT_XY
-            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-            setImageBitmap(frame.bitmap)
-            layout(page.left, page.top, page.right, page.bottom)
-        }
-        linkSource = source
-        overlay.add(source)
-        postDelayed({ if (linkSource === source) clearLinkSource() }, 2500)
+        linkSource = image(page)?.bitmap ?: return
+        linkPaint.alpha = 255
+        invalidate()
+        postDelayed(expireLinkSource, 2500)
     }
 
     fun revealLinkDestination(page: WebView) {
-        if (front !== page) return
-        val source = linkSource ?: return
-        source.animate().alpha(0f).setDuration(205).setInterpolator(PathInterpolator(.42f,0f,.78f,1f))
-            .withEndAction { if (linkSource === source) clearLinkSource() }.start()
+        if (front !== page || linkSource == null || linkFade != null) return
+        val fade = ValueAnimator.ofInt(255, 0)
+        linkFade = fade
+        fade.duration = 205
+        fade.interpolator = PathInterpolator(.42f,0f,.78f,1f)
+        fade.addUpdateListener {
+            linkPaint.alpha = it.animatedValue as Int
+            invalidate()
+        }
+        fade.addListener(object : AnimatorListenerAdapter() {
+            override fun onAnimationEnd(ended: Animator) {
+                if (linkFade === ended) {
+                    linkFade = null
+                    clearLinkSource()
+                }
+            }
+        })
+        fade.start()
     }
 
     private fun clearLinkSource() {
-        val source = linkSource ?: return
+        if (linkSource == null) return
         linkSource = null
-        source.animate().cancel()
-        overlay.remove(source)
-        source.setImageDrawable(null)
+        removeCallbacks(expireLinkSource)
+        val fade = linkFade
+        linkFade = null
+        fade?.cancel()
+        front?.postInvalidateOnAnimation()
+        invalidate()
+        refreshGlass()
     }
 
     private fun attach(page: WebView) {
@@ -287,6 +301,14 @@ internal class TabViewport(context: Context, private val glass: WebGlassCapture,
         val second = incoming
         if (first == null || second == null || images.get(first) == null || images.get(second) == null) {
             super.dispatchDraw(canvas)
+            val source = linkSource
+            val page = front
+            if (source != null && page != null) {
+                // Draw both documents in the viewport's render pass. A ViewOverlay
+                // can keep the old WebView layer on screen after an origin change.
+                destination.set(page.left,page.top,page.right,page.bottom)
+                canvas.drawBitmap(source,null,destination,linkPaint)
+            }
             return
         }
         // Safari-style transition snapshots keep both Chromium renderers out of the

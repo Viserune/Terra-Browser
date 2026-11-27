@@ -189,3 +189,27 @@ def verify_tablet_menu(shell, locate, shot, adb, port):
         shell("input","motionevent","UP",*target)
     locate("Garden link received")
     print("PASS the original held link lifts into a system drag and the receiving webpage gets its URL", flush=True)
+    # A WebView can report the new DOM and toolbar URL while its previous
+    # document is still visible. Check the actual surface after changing hosts.
+    shell("am","start","-a","android.intent.action.VIEW","-n","app.terra.browser/.MainActivity",
+          "-d",f"http://localhost:{port}/preview-origin")
+    for iteration in range(3):
+        point = locate("Preview garden")
+        shell("input","swipe",*point,*point,800)
+        locate("隐藏预览")
+        card = preview_bounds(shot("tablet-cross-origin-preview"))
+        assert card
+        l,t,r,b = card
+        shell("input","tap",(l+r)//2,(t+b)//2)
+        locate("Garden")
+        until = time.monotonic()+5
+        while time.monotonic()<until:
+            frame = shot("tablet-cross-origin-target")
+            fraction = frame.getcolors(frame.width*frame.height)
+            target_pixels = sum(n for n,color in fraction if color==(64,128,88))
+            if target_pixels > frame.width*frame.height*.60:break
+            time.sleep(.12)
+        else:raise AssertionError(f"Old page still visible after preview navigation {iteration+1}")
+        shell("input","tap",*locate("后退"))
+        locate("Preview garden")
+    print("PASS three preview taps render the new document across origins and Back restores the source each time",flush=True)

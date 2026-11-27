@@ -686,6 +686,7 @@ open class MainActivity : ComponentActivity() {
             }
             override fun onPageFinished(v: WebView, url: String) {
                 if (p !in tabs || !httpAddress(url) || url != v.url) return
+                (v.parent as? TabViewport)?.revealLinkDestination(v)
                 (v.parent as? TabViewport)?.pullRefresh?.loaded(v)
                 if (web.pendingPosition != null) showRestoredDocument(url, finished=true)
                 (v.parent as? TabViewport)?.historySwipe?.apply {

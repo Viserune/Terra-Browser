@@ -18,6 +18,15 @@ from PIL import Image, ImageStat
 
 class Pages(BaseHTTPRequestHandler):
     def do_GET(self):
+        if self.path == "/preview-origin":
+            page = f"""<meta name=viewport content="width=device-width"><title>Coast</title>
+<body style="background:#4488cc"><h1>Coast</h1>
+<a style="position:absolute;left:42%;top:58%;padding:18px" href="http://127.0.0.1:{self.server.server_port}/garden">Preview garden</a>"""
+            self.send_response(200)
+            self.send_header("Content-Type","text/html; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(page.encode())
+            return
         if self.path == "/link-drop":
             html = b"""<meta name=viewport content="width=device-width"><title>Link drag</title>
 <a style="position:absolute;left:41%;top:46%;padding:18px" href="/garden">Garden link</a>
