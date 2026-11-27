@@ -57,6 +57,7 @@ import io.liquidkit.LiquidKitSymbol
 import io.liquidkit.LocalLiquidKitTokens
 import com.kyant.backdrop.components.LiquidMenuMetrics
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 private fun symbol(label: String) = when (label) {
@@ -97,16 +98,26 @@ internal fun SafariContextMenu(activity: MainActivity, menu: ContextMenu, dark: 
     val hasPreview = menu.previewUrl != null
     val shade = remember { Animatable(0f) }
     val labelFocus = remember { Animatable(0f) }
+    var laidOut by remember { mutableStateOf(false) }
+    var loadPreview by remember { mutableStateOf(false) }
     var closing by remember { mutableStateOf(false) }
     var selected by remember { mutableStateOf<(() -> Unit)?>(null) }
     fun close(action: (() -> Unit)?) {
         if (!closing) { selected = action; closing = true }
     }
-    LaunchedEffect(closing) {
+    LaunchedEffect(closing, laidOut) {
         if (hasPreview) {
+            if (!closing && !laidOut) return@LaunchedEffect
+            if (!closing) withFrameNanos { }
             val committing = selected != null
             val target = if (closing) 0f else 1f
             coroutineScope {
+                if (!closing) launch {
+                    // Constructing a Chromium renderer can take several display frames.
+                    // Let the link lift and the glass settle before mounting it.
+                    snapshotFlow { progress.value }.first { it >= .96f }
+                    loadPreview = true
+                }
                 launch {
                     val duration = if (!closing) 310 else if (committing) 155 else 275
                     val curve = if (closing) CubicBezierEasing(.27f,.08f,.26f,1f)
@@ -271,7 +282,7 @@ internal fun SafariContextMenu(activity: MainActivity, menu: ContextMenu, dark: 
             if (hasPreview) window?.setWindowAnimations(0)
             onDispose { }
         }
-        Box(Modifier.fillMaxSize()) {
+        Box(Modifier.fillMaxSize().onGloballyPositioned { if (hasPreview && !laidOut) laidOut = true }) {
             Box(Modifier.fillMaxSize().drawBehind {
                 if (hasPreview) drawRect(Color.Black.copy(alpha=.48f*shade.value.coerceIn(0f,1f)))
             }.clickable(remember { MutableInteractionSource() }, null) { close(null) })
@@ -337,7 +348,7 @@ internal fun SafariContextMenu(activity: MainActivity, menu: ContextMenu, dark: 
                                     }
                                 }
                                 if (activity.showPreviews) Box(Modifier.fillMaxSize()) {
-                                    LinkPreview(menu,surface)
+                                    if (loadPreview) LinkPreview(menu,surface)
                                     Box(Modifier.fillMaxSize().clickable(role = Role.Button, onClickLabel = "打开预览") {
                                         close {
                                             menu.source?.let { (it.parent as? TabViewport)?.holdLinkSource(it) }
@@ -350,7 +361,8 @@ internal fun SafariContextMenu(activity: MainActivity, menu: ContextMenu, dark: 
                         DialogGlassSurface(capture, Modifier.offset(
                             if (wide) previewWidth + gap else 0.dp,
                             if (wide) 0.dp else previewHeight + gap
-                        ).size(menuWidth,actionHeight), shape = RoundedCornerShape(metrics.radius), tint = surface.copy(alpha=.28f),
+                        ).size(menuWidth,actionHeight), shape = RoundedCornerShape(metrics.radius),
+                            tint = surface.copy(alpha=if (hasPreview && dark) .46f else .28f),
                             panelBlur=if (hasPreview) 14.dp else 0.dp) {
                             val tokens = LocalLiquidKitTokens.current.menu
                             val reveal = remember(branch) { Animatable(if (branch == null) 1f else 0f) }

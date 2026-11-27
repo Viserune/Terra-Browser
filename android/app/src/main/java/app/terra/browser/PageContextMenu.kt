@@ -168,11 +168,14 @@ internal fun MainActivity.bindPageMenu(tab: Page, web: WebView) {
 
         fun show(link: String?, image: String?, title: String? = null) {
             if (!current() || (link == null && image == null)) return
+            val tablet = resources.configuration.screenWidthDp >= 650
             showAnchoredActions(x, y, ::current, link ?: image, web) {
                 if (link != null) {
+                    val foreground = MenuAction("在新标签中打开") { add(tab.secret, link) }
+                    val file = if (image == null) MenuAction("下载") { download(tab, link, null, null) } else null
                     item("打开") { navigate(link) }
                     item("在后台打开") { add(tab.secret, link, background = true) }
-                    item("在新标签中打开") { add(tab.secret, link) }
+                    if (!tablet) add(foreground)
                     if (!tab.secret) {
                         val destinations = groupChoices().map { (id, name) ->
                             MenuAction(name) {
@@ -184,10 +187,11 @@ internal fun MainActivity.bindPageMenu(tab: Page, web: WebView) {
                         })
                     }
                     item("在新窗口中打开") { BrowserWindowActivity.open(this@bindPageMenu, link, tab.secret) }
+                    if (tablet && file != null) add(file)
                     if (!tab.secret) item("添加到阅读列表") { saveForLater(Site(link, link)) }
                     item("复制地址") { copy(link) }
                     item("共享") { share(link) }
-                    if (image == null) item("下载") { download(tab, link, null, null) }
+                    if (tablet) add(foreground) else if (file != null) add(file)
                 }
                 if (image != null) {
                     item("在新标签中查看图片") { add(tab.secret, image) }
@@ -196,7 +200,7 @@ internal fun MainActivity.bindPageMenu(tab: Page, web: WebView) {
                     if (link == null) item("共享图片地址") { share(image) }
                 }
             }
-            if (link != null && resources.configuration.screenWidthDp >= 650) {
+            if (link != null && tablet) {
                 val menu = contextMenu ?: return
                 var label = title
                 if (label.isNullOrBlank()) {
