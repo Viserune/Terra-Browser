@@ -18,6 +18,13 @@ from PIL import Image, ImageStat
 
 class Pages(BaseHTTPRequestHandler):
     def do_GET(self):
+        if self.path == "/panel-paper":
+            html = b"<meta name=viewport content='width=device-width'><title>Paper</title><body style='background:#b2cbd2'><p style='margin-top:68vh'>Panel sample</p>"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(html)
+            return
         if self.path.startswith("/suggest-"):
             from address_suggestions import fixture
             return fixture(self)
@@ -134,6 +141,7 @@ def main():
     parser.add_argument("--browser-keys",action="store_true",help="test browser shortcuts in a separate test window")
     parser.add_argument("--tablet-strip",action="store_true",help="measure the tablet tab strip and system light/dark changes")
     parser.add_argument("--tablet-sidebar",action="store_true",help="verify the tablet sidebar navigation and live glass")
+    parser.add_argument("--tablet-popup-motion",action="store_true",help="measure page menu growth and sidebar dimming on a tablet emulator")
     parser.add_argument("--address-menu",action="store_true",help="check held address actions, live glass, exact URLs and the compact bar")
     parser.add_argument("--open-tab-search",action="store_true",help="test live tab suggestions with a retained form and reading position")
     parser.add_argument("--address-motion",action="store_true",help="measure the tablet address field opening and closing on an emulator")
@@ -205,6 +213,10 @@ def main():
             if args.tablet_sidebar:
                 from tablet_sidebar import verify
                 verify(run,shell,locate,shot,site,prefix,args.menu_record)
+                return
+            if args.tablet_popup_motion:
+                from tablet_popup_motion import verify
+                verify(run,shell,locate,shot,port,prefix)
                 return
             if args.tablet_strip:
                 from tablet_strip import verify

@@ -9,8 +9,8 @@ android {
         applicationId = "app.terra.browser"
         minSdk = 29
         targetSdk = 37
-        versionCode = 35
-        versionName = "1.30"
+        versionCode = 36
+        versionName = "1.31"
     }
     sourceSets["main"].assets.srcDir("../../shared")
     buildTypes {

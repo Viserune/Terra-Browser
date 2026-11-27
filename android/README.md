@@ -102,4 +102,6 @@
 
 运行 `python tests/safari_motion.py 设备序列号 --open-tab-search --screens screenshots` 可在独立窗口用本地网页验证原表单、滚动位置、跨组选择、无痕隔离和玻璃取色。加 `--menu-record search.mp4` 可录制键盘选择过程。
 
-平板地址栏从工具栏中央向两侧展开，建议列表从同一块玻璃下沿向下出现。点面板外或按 Esc 可收起。用安装了 Pillow、NumPy 和 OpenCV 的 Python 运行 `python tests/safari_motion.py 设备序列号 --address-motion --menu-record address.mp4`，可在平板模拟器上记录原速动画，并逐帧检查放慢后的展开和收起。脚本结束时恢复系统动画设置。
+平板地址栏从工具栏中央向两侧展开。普通标签中，已有的个人收藏随面板出现，输入后切换到搜索建议。点面板外会收起玻璃面板，外接键盘可按 Esc 快速退出。用安装了 Pillow、NumPy 和 OpenCV 的 Python 运行 `python tests/safari_motion.py 设备序列号 --address-motion --menu-record address.mp4`，可在平板模拟器上记录原速动画，并逐帧检查放慢后的展开和收起。脚本结束时恢复系统动画设置。
+
+1.31 的平板侧栏、地址栏和页面菜单参考了真实 iPad Safari 在同一网页上的连续录屏。侧栏宽 320 dp，滑入时让背景逐渐变暗约 20%。页面菜单宽 232 dp，以工具栏按钮为起点放大，略微越过目标尺寸后回落。点空白处会将菜单收回到按钮。运行 `python tests/safari_motion.py 设备序列号 --tablet-popup-motion` 可检查侧栏边缘和背景亮度，并通过模拟器录屏检查菜单展开及收回时的中间尺寸。

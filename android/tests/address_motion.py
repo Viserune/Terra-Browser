@@ -46,7 +46,7 @@ def verify(adb, shell, locate, shot, port, prefix, movie):
             time.sleep(.7)
             open_field()
             time.sleep(settle)
-            escape()
+            shell("input","tap",round(w*.96),round(h*.24))
             time.sleep(settle)
         finally:
             recording.wait(timeout=seconds+8)

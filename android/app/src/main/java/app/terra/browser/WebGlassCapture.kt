@@ -4,7 +4,9 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
@@ -14,8 +16,13 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.layout.onGloballyPositioned
 import com.kyant.backdrop.backdrops.rememberCanvasBackdrop
+import com.kyant.backdrop.drawBackdrop
+import com.kyant.backdrop.effects.blur
 import io.liquidkit.LiquidKitGlassSurface
 import io.liquidkit.LocalLiquidKitBackdrop
+import io.liquidkit.rememberLiquidKitBackdrop
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import kotlin.math.ceil
@@ -134,11 +141,22 @@ internal fun WebGlassScene(capture: WebGlassCapture, modifier: Modifier) {
 
 @Composable
 internal fun DialogGlassSurface(capture: WebGlassCapture?, modifier: Modifier, shape: Shape,
-    tint: androidx.compose.ui.graphics.Color, content: @Composable BoxScope.() -> Unit) {
+    tint: androidx.compose.ui.graphics.Color, panelBlur: Dp = 0.dp, content: @Composable BoxScope.() -> Unit) {
     var origin by remember { mutableStateOf(Offset.Zero) }
     val glass = if (capture == null) LocalLiquidKitBackdrop.current else rememberCanvasBackdrop {
         with(capture) { drawBehindDialog(origin) }
     }
     val aligned = if (capture == null) modifier else modifier.onGloballyPositioned { origin = it.localToScreen(Offset.Zero) }
-    LiquidKitGlassSurface(aligned, backdrop = glass, shape = shape, tint = tint, content = content)
+    if (panelBlur == 0.dp || capture == null) {
+        LiquidKitGlassSurface(aligned, backdrop = glass, shape = shape, tint = tint, content = content)
+    } else {
+        // Menus cover whole paragraphs. Diffuse the document before LiquidKit
+        // applies the smaller control lens, leaving text inside the panel sharp.
+        val diffused = rememberLiquidKitBackdrop()
+        Box(aligned, propagateMinConstraints = true) {
+            Spacer(Modifier.matchParentSize().drawBackdrop(glass, shape = { shape },
+                effects = { blur(panelBlur.toPx()) }, highlight = null, shadow = null, exportedBackdrop = diffused))
+            LiquidKitGlassSurface(backdrop = diffused, shape = shape, tint = tint, content = content)
+        }
+    }
 }

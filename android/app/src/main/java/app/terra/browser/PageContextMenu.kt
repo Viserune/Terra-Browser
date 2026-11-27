@@ -57,14 +57,19 @@ internal fun MainActivity.tabCardMenu(tab: Page, x: Int, y: Int, visible: () -> 
 internal fun MainActivity.showBookmarkActions(site: Site, x: Int, y: Int, inLibrary: Boolean = false) {
     val source = page
     val saved = bookmarks.firstOrNull { it.url == site.url }
+    val inAddress = sheet == "地址"
     showAnchoredActions(x, y, {
         !isFinishing && !isDestroyed && page === source &&
-            (if (inLibrary) sheet == "书签" && saved != null else page.url.isEmpty() && sheet.isEmpty()) &&
+            (if (inLibrary) sheet == "书签" && saved != null else if (inAddress) sheet == "地址" && BrowserLibrary.isFavorite(site)
+                else page.url.isEmpty() && sheet.isEmpty()) &&
             bookmarks.firstOrNull { it.url == site.url } == saved
     }) {
         item("打开") { navigate(site.url) }
         item("在新标签中打开") { add(source.secret, site.url) }
-        item(if (saved == null) "添加书签" else "编辑书签") { editBookmark(site) }
+        item(if (saved == null) "添加书签" else "编辑书签") {
+            if (inAddress) sheet = ""
+            editBookmark(site)
+        }
         item("复制地址") { copy(site.url) }
         item("共享") { share(site.url) }
         if (saved != null) item("删除书签") {
