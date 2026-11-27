@@ -104,7 +104,7 @@ internal fun SafariContextMenu(activity: MainActivity, menu: ContextMenu, dark: 
     var openingLink by remember { mutableStateOf(false) }
     var selected by remember { mutableStateOf<(() -> Unit)?>(null) }
     DisposableEffect(menu) {
-        onDispose { (menu.source?.parent as? TabViewport)?.linkMenuDismissed(menu) }
+        onDispose { (menu.source?.parent as? TabViewport)?.linkCardClosed(menu) }
     }
     fun close(action: (() -> Unit)?) {
         if (!closing) { selected = action; closing = true }
@@ -132,6 +132,7 @@ internal fun SafariContextMenu(activity: MainActivity, menu: ContextMenu, dark: 
                 if (closing) {
                     progress.animateTo(0f, tween(if (committing) 95 else 165, delayMillis=14,
                         easing=CubicBezierEasing(.32f,.04f,.23f,1f)))
+                    if (openingLink) (menu.source?.parent as? TabViewport)?.linkCardClosed(menu)
                 } else progress.animateTo(1f, spring(dampingRatio=.79f, stiffness=655f))
             }
         } else if (closing) progress.animateTo(0f, tween(135))

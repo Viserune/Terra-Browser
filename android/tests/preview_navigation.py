@@ -5,6 +5,7 @@ import time
 from urllib.parse import urlsplit
 
 from link_groups import preview_bounds
+from PIL import ImageStat
 
 
 def fixture(handler):
@@ -93,6 +94,10 @@ def verify(shell, locate, shot, site):
     shell("input","keyevent","4")
     locate("Harbor72")
     initial = shot("handoff-source")
+    cx,cy = locate("页面菜单")
+    glass_patch = (cx+int(initial.width*.065),cy-4,cx+int(initial.width*.106),cy+4)
+    def colors(image):
+        return color_at(image,.05,.45),ImageStat.Stat(image.crop(glass_patch)).median[2]
     open_menu("Inspect route")
     shell("input","keyevent","4")
     locate("Visit route")
@@ -111,6 +116,7 @@ def verify(shell, locate, shot, site):
                 samples.append((x,y,rest))
     assert len(samples) >= 3,"No exposed source beside the menu"
     speed = shell("settings","get","global","animator_duration_scale").decode().strip()
+    fade_samples = []
     try:
         # Stretch only the dismissal so an adb screenshot can observe the
         # real request and the fading menu in the same frame on slow hosts.
@@ -122,11 +128,32 @@ def verify(shell, locate, shot, site):
         brightness = median(sum(color_at(during,x,y))/sum(rest) for x,y,rest in samples)
         assert .43 < brightness < .93,("The source had already undimmed before the tab request",brightness)
         print(f"PASS the live tab requests the destination during menu dismissal (background ratio {brightness:.2f})",flush=True)
+        site.handoff_release.set()
+        until = time.monotonic()+5
+        while time.monotonic()<until:
+            frame = colors(shot(f"handoff-fade-{len(fade_samples):02}"))
+            fade_samples.append(frame)
+            if frame[0] == (64,128,88): break
     finally:
         site.handoff_release.set()
         restore_speed(speed)
 
     locate("Notes: Harbor72")
+    target = shot("handoff-target")
+    _,start_blue = colors(initial)
+    _,end_blue = colors(target)
+    assert start_blue-end_blue>12,(glass_patch,start_blue,end_blue)
+    # Dimming affects all three channels. During the actual document blend
+    # green stays near 128 while blue moves from 204 to 88.
+    matching = []
+    for rgb,blue in fade_samples:
+        progress = (204-rgb[2])/116
+        if 122<=rgb[1]<=140 and .22<progress<.87:
+            material = (start_blue-blue)/(start_blue-end_blue)
+            if .08<material<.96 and abs(material-progress)<.38:
+                matching.append((round(progress,2),round(material,2)))
+    assert matching,("LiquidKit did not follow the document during its fade",start_blue,end_blue,fade_samples)
+    print("PASS the toolbar glass takes an intermediate color during the actual page blend",matching,flush=True)
     tap(locate("Mark trail"))
     locate("Trail marked")
     assert max(abs(a-b) for a,b in zip(color_at(shot("handoff-real-tap"),.4,.6),(216,166,64)))<7

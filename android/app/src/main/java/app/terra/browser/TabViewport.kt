@@ -241,7 +241,7 @@ internal class TabViewport(context: Context, private val glass: WebGlassCapture,
         fadeLinkWhenReady()
     }
 
-    fun linkMenuDismissed(menu: ContextMenu) {
+    fun linkCardClosed(menu: ContextMenu) {
         if (closingLinkMenu !== menu) return
         closingLinkMenu = null
         fadeLinkWhenReady()
@@ -260,6 +260,7 @@ internal class TabViewport(context: Context, private val glass: WebGlassCapture,
         fade.addUpdateListener {
             linkPaint.alpha = it.animatedValue as Int
             invalidate()
+            refreshGlass()
         }
         fade.addListener(object : AnimatorListenerAdapter() {
             override fun onAnimationEnd(ended: Animator) {
