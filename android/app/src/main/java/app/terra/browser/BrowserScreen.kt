@@ -56,7 +56,6 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.ui.input.pointer.util.addPointerInputChange
 import androidx.compose.ui.layout.LayoutCoordinates
@@ -789,15 +788,22 @@ private fun addressLabel(p: Page) = if (p.url.isEmpty()) "搜索或输入网址"
     }
 }
 
-@Composable private fun Input(value: TextFieldValue, hint: String, set: (TextFieldValue) -> Unit, modifier: Modifier, url: Boolean, submit: () -> Unit) {
+@Composable private fun Input(value: TextFieldValue, hint: String, set: (TextFieldValue) -> Unit, modifier: Modifier, editing: Boolean, submit: () -> Unit) {
     val focus = remember { FocusRequester() }
+    val windowFocused = LocalWindowInfo.current.isWindowFocused
+    val keyboard = LocalSoftwareKeyboardController.current
     BasicTextField(value, set, modifier.focusRequester(focus).semantics { contentDescription = hint }
         .padding(horizontal=8.dp,vertical=14.dp),
         singleLine = true, textStyle = TextStyle(color = Ink.current,fontSize = 17.sp), cursorBrush = SolidColor(Accent.current),
-        keyboardOptions = KeyboardOptions(keyboardType = if (url) KeyboardType.Uri else KeyboardType.Text, imeAction = ImeAction.Go),
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Go),
         keyboardActions = KeyboardActions(onGo = { submit() }),
         decorationBox = { field -> Box { if (value.text.isEmpty()) Label(hint, 16, Muted.current); field() } })
-    LaunchedEffect(Unit) { focus.requestFocus() }
+    LaunchedEffect(editing, windowFocused) {
+        if (editing && windowFocused) {
+            focus.requestFocus()
+            keyboard?.show()
+        }
+    }
 }
 
 @Composable private fun FindBar(a: MainActivity, modifier: Modifier) {
@@ -873,6 +879,7 @@ private fun addressLabel(p: Page) = if (p.url.isEmpty()) "搜索或输入网址"
     var edited by remember(page.id) { mutableStateOf(false) }
     var keyboardChoices by remember(page.id) { mutableStateOf(false) }
     var dismissedWithEscape by remember(page.id) { mutableStateOf(false) }
+    LaunchedEffect(a.sheet) { if (a.sheet == "地址") dismissedWithEscape = false }
     val text = query.text
     val suggestions by remember(a,page,text) { derivedStateOf { a.addressSuggestions(text) } }
     var selection by remember(page,text) { mutableStateOf<String?>(null) }
@@ -887,13 +894,14 @@ private fun addressLabel(p: Page) = if (p.url.isEmpty()) "搜索或输入网址"
         val choice = suggestions.getOrNull(selectedIndex)
         if (choice == null) a.navigate(text) else choice.choose()
     }
-    var panelOrigin by remember { mutableStateOf<Offset?>(null) }
-    BoxWithConstraints(Modifier.fillMaxSize().safeDrawingPadding().imePadding().onGloballyPositioned {
-        panelOrigin = it.localToScreen(Offset.Zero)
-    }.onPreviewKeyEvent { key ->
-        val e = key.nativeKeyEvent
+    val keyboard = LocalSoftwareKeyboardController.current
+    val handleKey by rememberUpdatedState<(KeyEvent) -> Boolean>(handle@{ e ->
+        // A shortcut can arrive after Escape but before this window loses input focus.
+        if (a.sheet != "地址") return@handle a.browserKeys.handle(e)
+        if (a.prompt != null || a.contextMenu != null || a.bookmarkDraft != null) return@handle false
         if (e.action == KeyEvent.ACTION_DOWN && e.keyCode == KeyEvent.KEYCODE_ESCAPE && e.hasNoModifiers()) {
             dismissedWithEscape = true
+            keyboard?.hide()
         }
         if (e.hasNoModifiers() && suggestions.isNotEmpty()) {
             val down = e.keyCode == KeyEvent.KEYCODE_DPAD_DOWN
@@ -904,14 +912,14 @@ private fun addressLabel(p: Page) = if (p.url.isEmpty()) "搜索或输入网址"
                         else (selectedIndex-1).coerceAtLeast(-1)
                     selection = suggestions.getOrNull(next)?.key
                 }
-                return@onPreviewKeyEvent true
+                return@handle true
             }
             if (selectedIndex >= 0 && (e.keyCode == KeyEvent.KEYCODE_ENTER || e.keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER)) {
                 if (e.action == KeyEvent.ACTION_DOWN && e.repeatCount == 0) submit()
-                return@onPreviewKeyEvent true
+                return@handle true
             }
         }
-        a.browserKeys.handle(key.nativeKeyEvent) { event ->
+        a.browserKeys.handle(e) { event ->
             when (event.keyCode) {
                 android.view.KeyEvent.KEYCODE_L -> if (!event.isShiftPressed) {
                     query = query.copy(selection = TextRange(0, query.text.length))
@@ -927,6 +935,10 @@ private fun addressLabel(p: Page) = if (p.url.isEmpty()) "搜索或输入网址"
                 else -> false
             }
         }
+    })
+    var panelOrigin by remember { mutableStateOf<Offset?>(null) }
+    BoxWithConstraints(Modifier.fillMaxSize().safeDrawingPadding().imePadding().onGloballyPositioned {
+        panelOrigin = it.localToScreen(Offset.Zero)
     }) {
         val tablet = maxWidth >= 650.dp
         val favoritesVisible = tablet && !page.secret && !keyboardChoices && BrowserLibrary.favorites.isNotEmpty() &&
@@ -937,7 +949,7 @@ private fun addressLabel(p: Page) = if (p.url.isEmpty()) "搜索或输入网址"
         DisposableEffect(window,tablet) {
             val original = window?.attributes?.dimAmount
             val animations = window?.attributes?.windowAnimations
-            val stopObserving = if (tablet) window?.let(a.menuTouches::observe) else null
+            val stopObserving = window?.let { a.menuTouches.observe(it) { key -> handleKey(key) } }
             if (tablet) {
                 window?.setDimAmount(0f)
                 window?.setWindowAnimations(0)
@@ -956,7 +968,10 @@ private fun addressLabel(p: Page) = if (p.url.isEmpty()) "搜索或输入网址"
         var lastDark by remember { mutableStateOf(sampledDark) }
         if (a.sheet == "地址") SideEffect { lastDark = sampledDark }
         val dark = if (a.sheet == "地址") sampledDark else lastDark
-        Box(Modifier.fillMaxSize().clickable(remember { MutableInteractionSource() }, null) { a.sheet = "" })
+        Box(Modifier.fillMaxSize().clickable(remember { MutableInteractionSource() }, null) {
+            keyboard?.hide()
+            a.sheet = ""
+        })
         val field: @Composable () -> Unit = {
             Row(Modifier.fillMaxWidth().padding(horizontal=6.dp),verticalAlignment=Alignment.CenterVertically) {
                 if (tablet) LiquidKitIcon(Icon.Search, Muted.current, Modifier.padding(start=12.dp).size(18.dp))
@@ -964,7 +979,7 @@ private fun addressLabel(p: Page) = if (p.url.isEmpty()) "搜索或输入网址"
                 Input(query,"网址或搜索词",{
                     if (it.text != query.text) { edited = true; keyboardChoices = false }
                     query = it
-                },Modifier.weight(1f),true,::submit)
+                },Modifier.weight(1f),a.sheet == "地址",::submit)
                 if (text.isNotEmpty()) Tool(Icon.Close,"清空输入") {
                     edited = true
                     keyboardChoices = false

@@ -116,6 +116,8 @@ def verify(adb, shell, locate, shot, port, prefix):
     shell("input","swipe",*point,*point,680)
     tap(locate("删除书签"))
     tap(locate("删除"))
+    locate("个人收藏")
+    assert name.encode() not in adb("exec-out","cat","/sdcard/terra-motion.xml"), "Deleted favorite still present"
     shell("input","keyevent","KEYCODE_ESCAPE")
     locate("Panel sample")
     print("PASS favorite opens the saved page and supports its long-press menu", flush=True)
