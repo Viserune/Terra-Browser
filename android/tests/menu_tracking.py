@@ -193,7 +193,17 @@ def verify_tablet_menu(shell, locate, shot, adb, port):
     # document is still visible. Check the actual surface after changing hosts.
     shell("am","start","-a","android.intent.action.VIEW","-n","app.terra.browser/.MainActivity",
           "-d",f"http://localhost:{port}/preview-origin")
-    for iteration in range(3):
+    def wait_for_document(color, name):
+        until = time.monotonic()+5
+        while time.monotonic()<until:
+            frame = shot(name)
+            colors = frame.getcolors(frame.width*frame.height)
+            if sum(n for n,rgb in colors if rgb==color) > frame.width*frame.height*.60:
+                return
+            time.sleep(.12)
+        raise AssertionError(f"The visible document did not repaint: {name}")
+
+    for _ in range(3):
         point = locate("Preview garden")
         shell("input","swipe",*point,*point,800)
         locate("隐藏预览")
@@ -202,14 +212,8 @@ def verify_tablet_menu(shell, locate, shot, adb, port):
         l,t,r,b = card
         shell("input","tap",(l+r)//2,(t+b)//2)
         locate("Garden")
-        until = time.monotonic()+5
-        while time.monotonic()<until:
-            frame = shot("tablet-cross-origin-target")
-            fraction = frame.getcolors(frame.width*frame.height)
-            target_pixels = sum(n for n,color in fraction if color==(64,128,88))
-            if target_pixels > frame.width*frame.height*.60:break
-            time.sleep(.12)
-        else:raise AssertionError(f"Old page still visible after preview navigation {iteration+1}")
+        wait_for_document((64,128,88),"tablet-cross-origin-target")
         shell("input","tap",*locate("后退"))
         locate("Preview garden")
+        wait_for_document((68,136,204),"tablet-cross-origin-restored")
     print("PASS three preview taps render the new document across origins and Back restores the source each time",flush=True)

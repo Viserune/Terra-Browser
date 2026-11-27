@@ -83,7 +83,7 @@ internal class WebGlassCapture {
         val canvas = Canvas(image)
         canvas.scale(width.toFloat()/view.width,height.toFloat()/(bottom-top))
         canvas.translate(0f,-top.toFloat())
-        view.draw(canvas)
+        view.drawGlassDocument(canvas)
         val previous = frame
         if (previous?.area==area && image.sameAs(previous.bitmap)) return
         frame = Sample(image,area)

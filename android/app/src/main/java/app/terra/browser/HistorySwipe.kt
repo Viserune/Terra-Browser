@@ -62,7 +62,10 @@ internal class HistorySwipe(private val host: TabViewport, private val redraw: (
         val index = web.copyBackForwardList().currentIndex
         web.postVisualStateCallback(0, object : WebView.VisualStateCallback() {
             override fun onComplete(requestId: Long) {
-                if (web.parent === host && web.url == url && web.copyBackForwardList().currentIndex == index) remember(web)
+                if (web.parent === host && web.url == url && web.copyBackForwardList().currentIndex == index) {
+                    remember(web)
+                    web.postInvalidateOnAnimation()
+                }
             }
         })
     }

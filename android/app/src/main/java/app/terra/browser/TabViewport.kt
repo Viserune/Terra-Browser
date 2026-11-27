@@ -135,8 +135,7 @@ internal class TabViewport(context: Context, private val glass: WebGlassCapture,
         set(value) {
             if (field == value) return
             field = value
-            if (value && front != null && width>0 && height>0) glass.sample(this)
-            else refreshGlass()
+            refreshGlass()
         }
 
     private fun updateInsets() {
@@ -175,13 +174,17 @@ internal class TabViewport(context: Context, private val glass: WebGlassCapture,
         }
     }
 
+    // Post from the frame callback so the real hardware traversal gets its
+    // display list before any software readback for the glass.
+    private val afterDisplayFrame = Runnable { post(sample) }
+
     private fun refreshGlass() {
         if (scheduled || sampling || !isAttachedToWindow) return
         scheduled = true
         // A small, cheap strip can track the very next display frame. Allow a
         // frame between captures when copying a full scene or a costly WebView.
-        if (!fullGlassScene && sampleMillis < frameMillis/4) postOnAnimation(sample)
-        else postOnAnimationDelayed(sample,frameMillis.toLong().coerceAtLeast(1L))
+        if (!fullGlassScene && sampleMillis < frameMillis/4) postOnAnimation(afterDisplayFrame)
+        else postOnAnimationDelayed(afterDisplayFrame,frameMillis.toLong().coerceAtLeast(1L))
     }
 
     override fun onDescendantInvalidated(child: View, target: View) {
@@ -295,26 +298,44 @@ internal class TabViewport(context: Context, private val glass: WebGlassCapture,
         return SlideImage(bitmap,page.url,page.scrollY,page.width,page.height).also { images.put(page,it) }
     }
 
-    override fun dispatchDraw(canvas: Canvas) {
-        if (historySwipe.draw(canvas)) return
-        val first = outgoing
-        val second = incoming
-        if (first == null || second == null || images.get(first) == null || images.get(second) == null) {
-            super.dispatchDraw(canvas)
-            val source = linkSource
-            val page = front
-            if (source != null && page != null) {
-                // Draw both documents in the viewport's render pass. A ViewOverlay
-                // can keep the old WebView layer on screen after an origin change.
-                destination.set(page.left,page.top,page.right,page.bottom)
-                canvas.drawBitmap(source,null,destination,linkPaint)
-            }
-            return
-        }
-        // Safari-style transition snapshots keep both Chromium renderers out of the
-        // frame loop. LiquidKit sees the same moving pixels as the visible viewport.
+    private fun drawNavigation(canvas: Canvas): Boolean {
+        if (historySwipe.draw(canvas)) return true
+        val first = outgoing ?: return false
+        val second = incoming ?: return false
+        if (images.get(first) == null || images.get(second) == null) return false
         drawSlide(canvas,first)
         drawSlide(canvas,second)
+        return true
+    }
+
+    private fun drawLinkSource(canvas: Canvas) {
+        val source = linkSource ?: return
+        val page = front ?: return
+        destination.set(page.left,page.top,page.right,page.bottom)
+        canvas.drawBitmap(source,null,destination,linkPaint)
+    }
+
+    override fun dispatchDraw(canvas: Canvas) {
+        if (drawNavigation(canvas)) return
+        super.dispatchDraw(canvas)
+        drawLinkSource(canvas)
+    }
+
+    internal fun drawGlassDocument(canvas: Canvas) {
+        if (drawNavigation(canvas)) return
+        val page = front ?: return
+        val x = page.left + page.translationX
+        val y = page.top.toFloat()
+        val checkpoint = canvas.save()
+        canvas.clipRect(x,y,x+page.width,y+page.height)
+        canvas.translate(x-page.scrollX,y-page.scrollY)
+        // Traversing the ViewGroup into a bitmap can consume a WebView's dirty
+        // display list. Sample the visible document without traversing siblings.
+        val needsRedraw = page.isDirty
+        page.draw(canvas)
+        if (needsRedraw) page.invalidate()
+        canvas.restoreToCount(checkpoint)
+        drawLinkSource(canvas)
     }
 
     private fun drawSlide(canvas: Canvas, page: WebView) {
@@ -446,6 +467,7 @@ internal class TabViewport(context: Context, private val glass: WebGlassCapture,
         incoming = null
         for (i in 0 until childCount) (getChildAt(i) as? WebView)?.let(::hide)
         front?.setOnScrollChangeListener(null)
+        removeCallbacks(afterDisplayFrame)
         removeCallbacks(sample)
         scheduled = false
         glass.clear()
