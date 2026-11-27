@@ -666,6 +666,7 @@ open class MainActivity : ComponentActivity() {
             }
             override fun onPageCommitVisible(v: WebView, url: String) {
                 if (v.url == url) p.documentVisible = true
+                if (v.url == url) (v.parent as? TabViewport)?.revealLinkDestination(v)
                 if (v.url == url) (v.parent as? TabViewport)?.pullRefresh?.loaded(v)
                 if (v.url == url) showRestoredDocument(url, finished=false)
                 (v.parent as? TabViewport)?.historySwipe?.visualCommit(v)

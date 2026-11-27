@@ -14,6 +14,7 @@ import android.view.ViewGroup
 import android.view.animation.PathInterpolator
 import android.webkit.WebView
 import android.widget.FrameLayout
+import android.widget.ImageView
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
@@ -99,6 +100,7 @@ internal class TabViewport(context: Context, private val glass: WebGlassCapture,
     }
 
     override fun dispatchTouchEvent(event: android.view.MotionEvent): Boolean {
+        if (event.actionMasked == android.view.MotionEvent.ACTION_DOWN) clearLinkSource()
         readingToolbar.touch(event)
         val web = front
         if (web != null && outgoing == null) {
@@ -210,6 +212,38 @@ internal class TabViewport(context: Context, private val glass: WebGlassCapture,
     private var incoming: WebView? = null
     private var animation: ValueAnimator? = null
     private val settle = PathInterpolator(.2f, .85f, .25f, 1f)
+    private var linkSource: ImageView? = null
+
+    fun holdLinkSource(page: WebView) {
+        clearLinkSource()
+        if (front !== page || !isAttachedToWindow) return
+        images.remove(page)
+        val frame = image(page) ?: return
+        val source = ImageView(context).apply {
+            scaleType = ImageView.ScaleType.FIT_XY
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            setImageBitmap(frame.bitmap)
+            layout(page.left, page.top, page.right, page.bottom)
+        }
+        linkSource = source
+        overlay.add(source)
+        postDelayed({ if (linkSource === source) clearLinkSource() }, 2500)
+    }
+
+    fun revealLinkDestination(page: WebView) {
+        if (front !== page) return
+        val source = linkSource ?: return
+        source.animate().alpha(0f).setDuration(205).setInterpolator(PathInterpolator(.42f,0f,.78f,1f))
+            .withEndAction { if (linkSource === source) clearLinkSource() }.start()
+    }
+
+    private fun clearLinkSource() {
+        val source = linkSource ?: return
+        linkSource = null
+        source.animate().cancel()
+        overlay.remove(source)
+        source.setImageDrawable(null)
+    }
 
     private fun attach(page: WebView) {
         if (page.parent === this) return
@@ -336,6 +370,7 @@ internal class TabViewport(context: Context, private val glass: WebGlassCapture,
 
     fun display(page: WebView) {
         if (front === page) return
+        clearLinkSource()
         historySwipe.reset()
         val old = front
         val follow = neighbor === page && old != null && abs(old.translationX) > 0
@@ -379,6 +414,7 @@ internal class TabViewport(context: Context, private val glass: WebGlassCapture,
     }
 
     fun release() {
+        clearLinkSource()
         pullRefresh?.bind(null)
         readingToolbar.bind(null)
         historySwipe.reset()

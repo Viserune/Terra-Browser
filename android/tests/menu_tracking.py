@@ -109,9 +109,11 @@ def verify_menu_history(shell, locate, adb, port):
 
 def verify_tablet_menu(shell, locate, shot, adb, port):
     from link_groups import preview_bounds
+    from PIL import ImageStat
     shell("am", "start", "-a", "android.intent.action.VIEW", "-n", "app.terra.browser/.MainActivity",
           "-d", f"http://127.0.0.1:{port}/sky")
     press = locate("Open garden")
+    rest = shot("tablet-link-rest")
     shell("input", "swipe", *press, *press, 800)
     locate("隐藏预览")
     locate("打开")
@@ -132,7 +134,12 @@ def verify_tablet_menu(shell, locate, shot, adb, port):
         top -= 1
     width, height, header = (r-l)/density, (b-top)/density, (t-top)/density
     gap = (row[0]-r)/density - 9
-    assert abs(width-335) <= 2 and abs(height-476) <= 3 and abs(header-44) <= 2 and abs(gap-28) <= 2, (width,height,header,gap)
+    assert abs(width-342) <= 2 and abs(height-476) <= 3 and abs(header-44) <= 2 and abs(gap-20) <= 2, (width,height,header,gap)
+    patch = (int(image.width*.88),int(image.height*.80),int(image.width*.94),int(image.height*.83))
+    before = ImageStat.Stat(rest.crop(patch)).mean
+    after = ImageStat.Stat(image.crop(patch)).mean
+    factors = [b/a for a,b in zip(before,after) if a>30]
+    assert factors and all(.48 < value < .56 for value in factors), (before,after)
     shell("input","tap",*locate("在标签页组中打开"))
     locate("新建标签组")
     child = preview_bounds(shot("tablet-link-groups"))
@@ -141,6 +148,44 @@ def verify_tablet_menu(shell, locate, shot, adb, port):
     shell("input","tap",*locate("隐藏预览"))
     locate("显示预览")
     shell("input","tap",*locate("显示预览"))
-    shell("input","tap",*locate("打开"))
+    first = locate("打开")
+    second = locate("在后台打开")
+    outside = (image.width-3,image.height//2)
+
+    def slide(start, via, end):
+        shell("input","motionevent","DOWN",*start)
+        try:
+            shell("input","motionevent","MOVE",*via)
+            time.sleep(.24)
+            shell("input","motionevent","MOVE",*end)
+        finally:
+            shell("input","motionevent","UP",*end)
+
+    slide(first, second, outside)
+    locate("Sky")
+    press = locate("Open garden")
+    shell("input","swipe",*press,*press,800)
+    slide(locate("在后台打开"),first,first)
     locate("Garden")
-    print(f"PASS portrait preview {width:.0f} × {height:.0f} dp, panel gap {gap:.0f} dp, group submenu keeps preview anchored, hide/show/open", flush=True)
+    print(f"PASS portrait preview {width:.0f} × {height:.0f} dp, gap {gap:.0f} dp, background brightness {sum(factors)/len(factors):.2f}", flush=True)
+    print("PASS group submenu stays anchored, hide/show works, a fresh slide cancels outside or opens the row under the finger", flush=True)
+    shell("am","start","-a","android.intent.action.VIEW","-n","app.terra.browser/.MainActivity",
+          "-d",f"http://127.0.0.1:{port}/link-drop")
+    source = locate("Garden link")
+    target = locate("Drop link here")
+    shell("input","motionevent","DOWN",*source)
+    try:
+        locate("隐藏预览")
+        l,t,r,b = preview_bounds(shot("tablet-link-held"))
+        middle = (l+(r-l)//4,t+(b-t)//3)
+        for step in range(1,7):
+            x = round(source[0]+(middle[0]-source[0])*step/6)
+            y = round(source[1]+(middle[1]-source[1])*step/6)
+            shell("input","motionevent","MOVE",x,y)
+        shell("input","motionevent","MOVE",target[0],target[1]-8)
+        shell("input","motionevent","MOVE",*target)
+        shot("tablet-link-over-drop-target")
+    finally:
+        shell("input","motionevent","UP",*target)
+    locate("Garden link received")
+    print("PASS the original held link lifts into a system drag and the receiving webpage gets its URL", flush=True)

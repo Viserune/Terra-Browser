@@ -24,6 +24,7 @@ internal class ContextMenu(
     val isCurrent: () -> Boolean
 ) {
     var dragAway: ((androidx.compose.ui.geometry.Offset) -> Boolean)? = null
+    var startLinkDrag: (() -> Boolean)? = null
 }
 
 private fun MainActivity.showAnchoredActions(
@@ -165,7 +166,7 @@ internal fun MainActivity.bindPageMenu(tab: Page, web: WebView) {
         fun current() = gesture == press && !isFinishing && !isDestroyed &&
             web.isAttachedToWindow && tabs.getOrNull(index) === tab && web.url == document && sheet.isEmpty()
 
-        fun show(link: String?, image: String?) {
+        fun show(link: String?, image: String?, title: String? = null) {
             if (!current() || (link == null && image == null)) return
             showAnchoredActions(x, y, ::current, link ?: image, web) {
                 if (link != null) {
@@ -195,6 +196,19 @@ internal fun MainActivity.bindPageMenu(tab: Page, web: WebView) {
                     if (link == null) item("共享图片地址") { share(image) }
                 }
             }
+            if (link != null && resources.configuration.screenWidthDp >= 650) {
+                val menu = contextMenu ?: return
+                var label = title
+                if (label.isNullOrBlank()) {
+                    val reply = Handler(Looper.getMainLooper()) { message ->
+                        if (contextMenu === menu && message.data.getString("url") == link)
+                            label = message.data.getString("title")
+                        true
+                    }
+                    web.requestFocusNodeHref(reply.obtainMessage())
+                }
+                menu.startLinkDrag = { current() && web.dragPageLink(link, label, tab.secret) }
+            }
         }
 
         when (hit.type) {
@@ -203,7 +217,7 @@ internal fun MainActivity.bindPageMenu(tab: Page, web: WebView) {
                 val response = Handler(Looper.getMainLooper()) { message ->
                     val link = message.data.getString("url")?.takeIf(::httpAddress)
                     val image = message.data.getString("src")?.takeIf(::httpAddress)
-                    show(link, image ?: fallback?.takeUnless { it == link })
+                    show(link, image ?: fallback?.takeUnless { it == link }, message.data.getString("title"))
                     true
                 }
                 web.requestFocusNodeHref(response.obtainMessage())

@@ -18,6 +18,24 @@ from PIL import Image, ImageStat
 
 class Pages(BaseHTTPRequestHandler):
     def do_GET(self):
+        if self.path == "/link-drop":
+            html = b"""<meta name=viewport content="width=device-width"><title>Link drag</title>
+<a style="position:absolute;left:41%;top:46%;padding:18px" href="/garden">Garden link</a>
+<div contenteditable style="position:absolute;left:5%;top:73%;padding:24px;background:#aec">Drop link here</div>
+<output>Waiting for drop</output><script>
+const target = document.querySelector('div');
+target.ondragover = event => event.preventDefault();
+target.ondrop = event => {
+  event.preventDefault();
+  const url = event.dataTransfer.getData('text/uri-list') || event.dataTransfer.getData('text/plain');
+  document.querySelector('output').textContent = url.trim() === location.origin + '/garden' ? 'Garden link received' : 'Unexpected drop';
+};
+</script>"""
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(html)
+            return
         if self.path == "/panel-paper":
             html = b"<meta name=viewport content='width=device-width'><title>Paper</title><body style='background:#b2cbd2'><p style='margin-top:68vh'>Panel sample</p>"
             self.send_response(200)
