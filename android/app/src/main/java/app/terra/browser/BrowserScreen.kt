@@ -66,6 +66,8 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.paneTitle
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
@@ -170,6 +172,7 @@ private fun host(url: String) = Uri.parse(url).host.orEmpty()
             val overlayScene = if (libraryOverlay) rememberCombinedLiquidKitBackdrop(libraryPageScene, libraryScene) else scene
             CompositionLocalProvider(LocalLiquidKitBackdrop provides scene) {
                 BoxWithConstraints(Modifier.fillMaxSize().liquidKitBackdrop(libraryPageScene, enabled = libraryOverlay)
+                    .then(if (editingTabletAddress || tabletPanelVisible) Modifier.clearAndSetSemantics {} else Modifier)
                     .safeDrawingPadding().imePadding().clipToBounds()) {
                     val tablet = maxWidth >= 650.dp
                     val canFold = p.url.isNotBlank() && p.error.isEmpty() && a.sheet.isEmpty() &&
@@ -187,6 +190,8 @@ private fun host(url: String) = Uri.parse(url).host.orEmpty()
                             Label("正在准备浏览器…", 15, Muted.current)
                         } else AndroidView(factory = { TabViewport(it,capture,refresh) }, modifier = Modifier.fillMaxSize(),
                             onRelease = { it.release() }, update = {
+                                it.importantForAccessibility = if (editingTabletAddress || tabletPanelVisible)
+                                    android.view.View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS else android.view.View.IMPORTANT_FOR_ACCESSIBILITY_AUTO
                                 it.topClearance = if (!tablet) 0 else if (compact) compactClearance else toolbarHeight
                                 it.bottomClearance = if (tablet) 0 else if (compact) compactClearance else dockHeight
                                 it.display(a.browser(p))
@@ -289,6 +294,7 @@ private fun host(url: String) = Uri.parse(url).host.orEmpty()
     }
     BackHandler(enabled = a.bookmarkDraft == null && !phoneLibrary && a.sheet != "下载项目" && (a.sheet.isNotEmpty() || p.back || a.tabs.size > 1 || p.url.isNotEmpty())) {
         when {
+            a.sheet in librarySections && a.sheet != sidebarHome && !phoneLibrary -> a.sheet = sidebarHome
             a.sheet.isNotEmpty() -> a.sheet = ""
             p.back -> p.web?.goBack()
             else -> a.close(p)
@@ -434,38 +440,35 @@ private fun tabletAddressWidth(viewport: Dp) = (viewport * .44f).coerceAtMost(56
         transition.targetState = kind.isNotEmpty()
     }
     if (kind.isEmpty() && transition.isIdle && !transition.currentState) return
-    DisposableEffect(tabletPanel) {
-        onTabletPanelVisible(tabletPanel)
-        onDispose { onTabletPanelVisible(false) }
-    }
-    Dialog(onDismissRequest = {
-        a.sheet = if (library && displayed != sidebarHome) sidebarHome else ""
-    }, properties = DialogProperties(
-        usePlatformDefaultWidth = false, decorFitsSystemWindows = false
-    )) {
-        if (tabletPanel) {
-            val window = (LocalView.current.parent as? DialogWindowProvider)?.window
-            DisposableEffect(window) {
-                val dim = window?.attributes?.dimAmount
-                val animations = window?.attributes?.windowAnimations
-                window?.setDimAmount(0f)
-                window?.setWindowAnimations(0)
-                onDispose {
-                    if (dim != null) window.setDimAmount(dim)
-                    if (animations != null) window.setWindowAnimations(animations)
-                }
+    // Keep anchored panels in the page window so drawing and keyboard focus
+    // continue through the transition from the originating toolbar control.
+    if (tabletPanel || (tablet && displayed == "地址")) {
+        DisposableEffect(tabletPanel) {
+            onTabletPanelVisible(tabletPanel)
+            onDispose { onTabletPanelVisible(false) }
+        }
+        AnimatedVisibility(visibleState = transition, enter = EnterTransition.None, exit = ExitTransition.None,
+            modifier = Modifier.fillMaxSize().semantics { paneTitle = if (displayed == "地址") "地址栏" else displayed }) {
+            when (displayed) {
+                "地址" -> AddressEditor(a, capture, tabletAddress, tabletEditorBounds)
+                "页面菜单" -> PageMenu(a, capture)
+                else -> LibrarySidebar(a, displayed, recordLibrary, capture)
             }
         }
+        return
+    }
+    Dialog(onDismissRequest = { a.sheet = "" }, properties = DialogProperties(
+        usePlatformDefaultWidth = false, decorFitsSystemWindows = false
+    )) {
         AnimatedVisibility(visibleState = transition,
-            enter = if (tabletPanel || displayed=="地址") EnterTransition.None else if (displayed=="页面菜单") fadeIn(tween(110))
+            enter = if (displayed=="地址") EnterTransition.None else if (displayed=="页面菜单") fadeIn(tween(110))
                 else fadeIn(tween(170)) + slideInVertically(tween(190)) { it/12 },
-            exit = if (tabletPanel || displayed=="地址") ExitTransition.None else if (displayed=="页面菜单") fadeOut(tween(140))
+            exit = if (displayed=="地址") ExitTransition.None else if (displayed=="页面菜单") fadeOut(tween(140))
                 else fadeOut(tween(120)) + slideOutVertically(tween(150)) { it/12 }) {
             when (displayed) {
                 "页面菜单" -> PageMenu(a, capture)
                 "地址" -> AddressEditor(a, capture, tabletAddress, tabletEditorBounds)
                 "阅读器" -> a.page.readerArticle?.let { article -> key(article) { ReaderScreen(a, a.page, article) } }
-                in librarySections -> LibrarySidebar(a, displayed, recordLibrary, capture)
                 else -> Panel(a, displayed)
             }
         }
@@ -896,7 +899,7 @@ private fun addressLabel(p: Page) = if (p.url.isEmpty()) "搜索或输入网址"
     }
     val keyboard = LocalSoftwareKeyboardController.current
     val handleKey by rememberUpdatedState<(KeyEvent) -> Boolean>(handle@{ e ->
-        // A shortcut can arrive after Escape but before this window loses input focus.
+        // A shortcut can arrive while the field is still drawing its exit.
         if (a.sheet != "地址") return@handle a.browserKeys.handle(e)
         if (a.prompt != null || a.contextMenu != null || a.bookmarkDraft != null) return@handle false
         if (e.action == KeyEvent.ACTION_DOWN && e.keyCode == KeyEvent.KEYCODE_ESCAPE && e.hasNoModifiers()) {
@@ -946,21 +949,14 @@ private fun addressLabel(p: Page) = if (p.url.isEmpty()) "搜索或输入网址"
         val panelWidth = if (tablet) minOf(maxWidth * .75f, 620.dp) else maxWidth - 16.dp
         val suggestionsHeight = (maxHeight - 88.dp).coerceIn(0.dp, 340.dp)
         val window = (LocalView.current.parent as? DialogWindowProvider)?.window
-        DisposableEffect(window,tablet) {
-            val original = window?.attributes?.dimAmount
-            val animations = window?.attributes?.windowAnimations
-            val stopObserving = window?.let { a.menuTouches.observe(it) { key -> handleKey(key) } }
-            if (tablet) {
-                window?.setDimAmount(0f)
-                window?.setWindowAnimations(0)
-            }
+        DisposableEffect(a,window,tablet) {
+            val route: (KeyEvent) -> Boolean = { key -> handleKey(key) }
+            val stopObserving = window?.let { a.menuTouches.observe(it,route) }
+            if (window == null) a.addressKeyHandler = route
             onDispose {
                 stopObserving?.invoke()
-                if (tablet) {
-                    tabletEditorBounds.value = null
-                    if (original != null) window.setDimAmount(original)
-                    if (animations != null) window.setWindowAnimations(animations)
-                }
+                if (a.addressKeyHandler === route) a.addressKeyHandler = null
+                if (tablet) tabletEditorBounds.value = null
             }
         }
         val sampledDark = if (tablet) capture?.darkAddressBackdrop ?: (page.secret || isSystemInDarkTheme())

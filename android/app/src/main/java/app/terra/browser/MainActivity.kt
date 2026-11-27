@@ -137,9 +137,11 @@ open class MainActivity : ComponentActivity() {
     }
 
     internal val browserKeys = BrowserKeys(this)
+    internal var addressKeyHandler: ((KeyEvent) -> Boolean)? = null
     // An unhandled key must continue through ComponentActivity's normal dispatch.
     @android.annotation.SuppressLint("RestrictedApi")
-    override fun dispatchKeyEvent(event: KeyEvent) = browserKeys.handle(event) || super.dispatchKeyEvent(event)
+    override fun dispatchKeyEvent(event: KeyEvent) =
+        (addressKeyHandler?.invoke(event) ?: browserKeys.handle(event)) || super.dispatchKeyEvent(event)
 
     var sheet by mutableStateOf("")
     internal var sidebarLocation = sidebarHome
