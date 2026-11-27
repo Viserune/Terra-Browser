@@ -81,6 +81,9 @@ def verify(adb, shell, locate, shot, port, prefix, movie):
                 usable = energy > 12**2
                 masks = [(columns<center)&usable,(columns>center)&usable]
                 assert all(m.sum()>20 for m in masks),"Insufficient optical contrast at field boundaries"
+                distance = np.abs(columns-center)/w
+                edge_bands = [(mask & (distance<.26), mask & (distance>.32)) for mask in masks]
+                assert all(inner.any() and outer.any() for inner,outer in edge_bands)
                 samples = []
                 spreading = []
                 while True:
@@ -88,10 +91,12 @@ def verify(adb, shell, locate, shot, port, prefix, movie):
                     if not ok: break
                     progress = np.sum((profile(frame)-begin)*delta,axis=1)/np.maximum(energy,1)
                     samples.append([float(np.mean(progress[m]>.55)) for m in masks])
-                    distance = np.abs(columns-center)/w
-                    inner = usable & (distance<.26)
-                    outer = usable & (distance>.32)
-                    spreading.append(np.mean(progress[inner]>.55)>.8 and np.mean(progress[outer]>.55)<.2)
+                    # At native frame boundaries a moving edge may land partway
+                    # through a band. On each side the inner band must lead the
+                    # outer band. A whole-field crossfade has no such lead.
+                    painted = progress>.55
+                    spreading.append(all(painted[inner].mean()-painted[outer].mean()>.5
+                        for inner,outer in edge_bands))
             finally:
                 video.release()
             opened = [i for i,row in enumerate(samples) if min(row)>.85]
