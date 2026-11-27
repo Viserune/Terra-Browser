@@ -217,20 +217,42 @@ internal class TabViewport(context: Context, private val glass: WebGlassCapture,
     private var linkSource: Bitmap? = null
     private val linkPaint = Paint(Paint.FILTER_BITMAP_FLAG)
     private var linkFade: ValueAnimator? = null
+    private var closingLinkMenu: ContextMenu? = null
+    private var linkDestinationReady = false
     private val expireLinkSource = Runnable { clearLinkSource() }
 
-    fun holdLinkSource(page: WebView) {
+    fun beginLinkNavigation(page: WebView, snapshot: Bitmap?, menu: ContextMenu?) {
         clearLinkSource()
-        if (front !== page || !isAttachedToWindow) return
-        images.remove(page)
-        linkSource = image(page)?.bitmap ?: return
+        val target = menu?.previewUrl ?: return
+        if (front !== page || !isAttachedToWindow || snapshot == null) return
+        // A fragment jump can scroll the existing DOM without a new visual commit.
+        val current = page.url
+        if (current != target && current?.substringBefore('#') == target.substringBefore('#')) return
+        closingLinkMenu = menu
+        linkSource = snapshot
         linkPaint.alpha = 255
         invalidate()
         postDelayed(expireLinkSource, 2500)
     }
 
     fun revealLinkDestination(page: WebView) {
-        if (front !== page || linkSource == null || linkFade != null) return
+        if (front !== page || linkSource == null) return
+        linkDestinationReady = true
+        fadeLinkWhenReady()
+    }
+
+    fun linkMenuDismissed(menu: ContextMenu) {
+        if (closingLinkMenu !== menu) return
+        closingLinkMenu = null
+        fadeLinkWhenReady()
+    }
+
+    fun cancelLinkNavigation(page: WebView) {
+        if (front === page) clearLinkSource()
+    }
+
+    private fun fadeLinkWhenReady() {
+        if (!linkDestinationReady || closingLinkMenu != null || linkSource == null || linkFade != null) return
         val fade = ValueAnimator.ofInt(255, 0)
         linkFade = fade
         fade.duration = 205
@@ -253,6 +275,8 @@ internal class TabViewport(context: Context, private val glass: WebGlassCapture,
     private fun clearLinkSource() {
         if (linkSource == null) return
         linkSource = null
+        closingLinkMenu = null
+        linkDestinationReady = false
         removeCallbacks(expireLinkSource)
         val fade = linkFade
         linkFade = null

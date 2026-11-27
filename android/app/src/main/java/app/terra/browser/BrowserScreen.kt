@@ -781,6 +781,7 @@ private fun addressLabel(p: Page) = if (p.url.isEmpty()) "搜索或输入网址"
                 p.web?.let { web ->
                     if (loading) {
                         web.stopLoading()
+                        (web.parent as? TabViewport)?.cancelLinkNavigation(web)
                         (web.parent as? TabViewport)?.pullRefresh?.loaded(web)
                     } else web.reload()
                 }

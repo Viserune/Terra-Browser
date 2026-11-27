@@ -101,7 +101,11 @@ internal fun SafariContextMenu(activity: MainActivity, menu: ContextMenu, dark: 
     var laidOut by remember { mutableStateOf(false) }
     var loadPreview by remember { mutableStateOf(false) }
     var closing by remember { mutableStateOf(false) }
+    var openingLink by remember { mutableStateOf(false) }
     var selected by remember { mutableStateOf<(() -> Unit)?>(null) }
+    DisposableEffect(menu) {
+        onDispose { (menu.source?.parent as? TabViewport)?.linkMenuDismissed(menu) }
+    }
     fun close(action: (() -> Unit)?) {
         if (!closing) { selected = action; closing = true }
     }
@@ -109,7 +113,7 @@ internal fun SafariContextMenu(activity: MainActivity, menu: ContextMenu, dark: 
         if (hasPreview) {
             if (!closing && !laidOut) return@LaunchedEffect
             if (!closing) withFrameNanos { }
-            val committing = selected != null
+            val committing = openingLink || selected != null
             val target = if (closing) 0f else 1f
             coroutineScope {
                 if (!closing) launch {
@@ -350,9 +354,10 @@ internal fun SafariContextMenu(activity: MainActivity, menu: ContextMenu, dark: 
                                 if (activity.showPreviews) Box(Modifier.fillMaxSize()) {
                                     if (loadPreview) LinkPreview(menu,surface)
                                     Box(Modifier.fillMaxSize().clickable(role = Role.Button, onClickLabel = "打开预览") {
-                                        close {
-                                            menu.source?.let { (it.parent as? TabViewport)?.holdLinkSource(it) }
-                                            activity.navigate(menu.previewUrl!!)
+                                        if (!closing && menu.isCurrent()) {
+                                            openingLink = true
+                                            close(null)
+                                            activity.openLinkPreview(menu)
                                         }
                                     })
                                 }

@@ -479,11 +479,25 @@ open class MainActivity : ComponentActivity() {
     }
     fun navigate(input: String) {
         val destination = destinationFor(input) ?: return
+        loadDestination(destination)
+    }
+
+    internal fun openLinkPreview(menu: ContextMenu) {
+        val url = menu.previewUrl ?: return
+        if (page.web === menu.source && menu.isCurrent()) loadDestination(url, menu)
+    }
+
+    private fun loadDestination(destination: String, preview: ContextMenu? = null) {
         openingPreview = null
         page.error = ""
         sheet = ""
         page.url = destination
-        page.web?.let { (it.parent as? TabViewport)?.historySwipe?.remember(it); it.loadUrl(destination) }
+        page.web?.let { web ->
+            val viewport = web.parent as? TabViewport
+            val source = viewport?.historySwipe?.remember(web)
+            viewport?.beginLinkNavigation(web, source, preview)
+            web.loadUrl(destination)
+        }
         save()
     }
     fun share(url: String) {
@@ -704,6 +718,7 @@ open class MainActivity : ComponentActivity() {
             }
             override fun onReceivedError(v: WebView, r: WebResourceRequest, e: WebResourceError) {
                 if (r.isForMainFrame) {
+                    (v.parent as? TabViewport)?.cancelLinkNavigation(v)
                     if (openingPreview?.page === p) openingPreview = null
                     p.error = e.description.toString()
                 }

@@ -39,11 +39,11 @@ internal class HistorySwipe(private val host: TabViewport, private val redraw: (
     private var navigating = false
     private val endTransition = Runnable { reset() }
 
-    fun remember(web: WebView) {
-        if (web.width == 0 || web.height == 0 || web.visibility != WebView.VISIBLE || !web.isAttachedToWindow) return
+    fun remember(web: WebView): Bitmap? {
+        if (web.width == 0 || web.height == 0 || web.visibility != WebView.VISIBLE || !web.isAttachedToWindow) return null
         val history = web.copyBackForwardList()
-        val url = history.currentItem?.url ?: return
-        if (web.url != url) return
+        val url = history.currentItem?.url ?: return null
+        if (web.url != url) return null
         val scale = minOf(1f, 800f / maxOf(web.width, web.height))
         val image = Bitmap.createBitmap((web.width * scale).roundToInt().coerceAtLeast(1),
             (web.height * scale).roundToInt().coerceAtLeast(1), Bitmap.Config.ARGB_8888)
@@ -55,6 +55,8 @@ internal class HistorySwipe(private val host: TabViewport, private val redraw: (
             web.draw(this)
         }
         images.put(Entry(web, history.currentIndex, url), image)
+        web.postInvalidateOnAnimation()
+        return image
     }
 
     fun rememberWhenDrawn(web: WebView, url: String) {
@@ -64,7 +66,6 @@ internal class HistorySwipe(private val host: TabViewport, private val redraw: (
             override fun onComplete(requestId: Long) {
                 if (web.parent === host && web.url == url && web.copyBackForwardList().currentIndex == index) {
                     remember(web)
-                    web.postInvalidateOnAnimation()
                 }
             }
         })

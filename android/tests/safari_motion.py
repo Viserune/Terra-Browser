@@ -18,6 +18,9 @@ from PIL import Image, ImageStat
 
 class Pages(BaseHTTPRequestHandler):
     def do_GET(self):
+        if self.path.startswith("/handoff-"):
+            from preview_navigation import fixture
+            return fixture(self)
         if self.path == "/preview-origin":
             page = f"""<meta name=viewport content="width=device-width"><title>Coast</title>
 <body style="background:#4488cc"><h1>Coast</h1>
@@ -161,6 +164,7 @@ def main():
     parser.add_argument("--new-window", action="store_true", help="verify independent document tasks and shared bookmarks")
     parser.add_argument("--link-groups", action="store_true", help="open a link in a new or existing tab group and verify isolation")
     parser.add_argument("--tablet-menu", action="store_true", help="measure the side-by-side menu on an 820dp portrait test tablet")
+    parser.add_argument("--preview-navigation", action="store_true", help="test the live tab loading while the link preview closes")
     parser.add_argument("--menu-record",type=Path,help="record the interaction for --menu-drag, --link-groups, --library-glass or --library-motion or --bookmark-menu")
     parser.add_argument("--reader",action="store_true",help="verify Reader typography, article links and reading position")
     parser.add_argument("--reader-glass",action="store_true",help="sample moving article images beneath the Reader toolbar")
@@ -330,6 +334,10 @@ def main():
             if args.tablet_menu:
                 from menu_tracking import verify_tablet_menu
                 verify_tablet_menu(shell, locate, shot, run, port)
+                return
+            if args.preview_navigation:
+                from preview_navigation import verify
+                verify(shell, locate, shot, site)
                 return
             if args.menu_drag:
                 from menu_tracking import verify_menu_drag
