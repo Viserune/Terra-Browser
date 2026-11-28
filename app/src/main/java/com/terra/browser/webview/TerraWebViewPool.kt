@@ -669,7 +669,7 @@ class TerraWebViewPool(
     }
 
     fun ensureSnapshotForTransition(tabId: String) {
-        if (hasFreshSnapshot(tabId, maxAgeMs = 1500L)) return
+        if (hasFreshSnapshot(tabId, maxAgeMs = 180L)) return
         captureSnapshotSync(tabId, force = true)
     }
 

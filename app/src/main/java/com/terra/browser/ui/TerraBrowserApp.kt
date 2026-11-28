@@ -296,7 +296,7 @@ fun TerraBrowserApp(
                     closingOverrideRect = androidx.compose.ui.geometry.lerp(curReleaseStart, targetRect, t)
                     closingOverrideCornerDp = lerp(releaseStartCornerDp, 18f, t)
                     closingOverrideP = overviewProgress.value.coerceAtLeast(0.01f)
-                } else {
+                } else if (overviewProgress.value >= 0.96f) {
                     closingOverrideRect = null
                 }
                 releaseStartRect = null
@@ -591,8 +591,7 @@ fun TerraBrowserApp(
                     cardBoundsMap = cardBoundsMap,
                     layoutProfile = layoutProfile,
                     onCardPicked = { pickedId, bounds ->
-                        releaseStartRect = null
-                        morphTargetRectOverride = bounds ?: computeExpectedOverviewCardRect(
+                        val resolvedBounds = bounds ?: computeExpectedOverviewCardRect(
                             state = state,
                             tabId = pickedId,
                             layoutProfile = layoutProfile,
@@ -603,6 +602,15 @@ fun TerraBrowserApp(
                             cutoutStartPx = cutoutStartPx,
                             cutoutEndPx = cutoutEndPx,
                         )
+                        releaseStartRect = null
+                        morphTargetRectOverride = resolvedBounds
+                        if (pickedId != activeTab.id && overviewProgress.value < 0.96f) {
+                            closingOverrideRect = resolvedBounds
+                            closingOverrideCornerDp = 18f
+                            closingOverrideP = overviewProgress.value.coerceAtLeast(0.15f)
+                        } else {
+                            closingOverrideRect = null
+                        }
                     },
                 )
             }
