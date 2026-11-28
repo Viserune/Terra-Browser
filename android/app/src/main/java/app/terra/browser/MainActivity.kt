@@ -146,6 +146,9 @@ open class MainActivity : ComponentActivity() {
     var sheet by mutableStateOf("")
     internal var sidebarLocation = sidebarHome
     internal var pageMenuAnchor by mutableStateOf<androidx.compose.ui.geometry.Offset?>(null)
+    internal var shareAnchor by mutableStateOf<androidx.compose.ui.geometry.Offset?>(null)
+    internal var sharedPage by mutableStateOf<SharedPage?>(null)
+    internal val recentShareApps = mutableStateListOf<android.content.ComponentName>()
     internal val downloadAnchor = mutableStateOf<androidx.compose.ui.geometry.Rect?>(null)
     internal val downloads by lazy { BrowserDownloads(this) }
     var engine by BrowserLibrary::engine
@@ -285,6 +288,7 @@ open class MainActivity : ComponentActivity() {
     }
     private fun openIntent(incoming: Intent) {
         if (incoming.action == Intent.ACTION_VIEW && httpAddress(incoming.dataString)) {
+            sharedPage = null
             contextMenu = null
             bookmarkDraft = null
             add(false, incoming.dataString!!)
@@ -334,13 +338,14 @@ open class MainActivity : ComponentActivity() {
     fun notice(s: String) = Toast.makeText(this, s, Toast.LENGTH_SHORT).show()
     private fun profilesAvailable() = WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE)
     fun add(secret: Boolean, url: String = "", background: Boolean = false,
-            groupId: String = if (secret) "" else preferredTab(false)?.groupId.orEmpty()) {
+            groupId: String = if (secret) "" else preferredTab(false)?.groupId.orEmpty(),
+            keepOverview: Boolean = false) {
         if (secret && !webReady) { notice("正在准备浏览器，请稍后再试"); return }
         if (secret && !profilesAvailable()) { notice("请更新系统 WebView 以启用隔离的无痕标签"); return }
-        insertPage(Page(secret,url),groupId,background)
+        insertPage(Page(secret,url),groupId,background,keepOverview)
     }
 
-    private fun insertPage(newPage: Page, groupId: String, background: Boolean) {
+    private fun insertPage(newPage: Page, groupId: String, background: Boolean, keepOverview: Boolean=false) {
         if (!background) {
             openingPreview = null
             rememberViewport(page)
@@ -353,7 +358,7 @@ open class MainActivity : ComponentActivity() {
         } else {
             leaveFullscreen()
             index = tabs.lastIndex
-            sheet = ""
+            if (!keepOverview) sheet = ""
         }
         save()
     }
@@ -499,9 +504,6 @@ open class MainActivity : ComponentActivity() {
             web.loadUrl(destination)
         }
         save()
-    }
-    fun share(url: String) {
-        startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, url), null))
     }
     fun copy(url: String) {
         getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("网址", url))
@@ -802,6 +804,7 @@ open class MainActivity : ComponentActivity() {
 
     override fun onStop() {
         rememberViewport(page)
+        sharedPage = null
         contextMenu = null
         prompt?.let { answer(it, false) }
         save()

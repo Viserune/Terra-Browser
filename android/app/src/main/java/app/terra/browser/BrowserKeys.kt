@@ -19,7 +19,7 @@ internal class BrowserKeys(private val activity: MainActivity) {
         if (event.repeatCount > 0) return key in claimed
         claimed.remove(key)
         val handled = with(activity) {
-            if (tabs.isEmpty() || prompt != null || bookmarkDraft != null || contextMenu != null || videoFullscreen)
+            if (tabs.isEmpty() || prompt != null || bookmarkDraft != null || contextMenu != null || sharedPage != null || videoFullscreen)
                 return false
             val code = event.keyCode
             if (code == KEYCODE_ESCAPE && event.hasNoModifiers() && (sheet == "地址" || sheet == "查找")) {

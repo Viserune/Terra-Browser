@@ -72,7 +72,7 @@ internal fun MainActivity.showBookmarkActions(site: Site, x: Int, y: Int, inLibr
             editBookmark(site)
         }
         item("复制地址") { copy(site.url) }
-        item("共享") { share(site.url) }
+        item("共享") { share(site.url, site.name, androidx.compose.ui.geometry.Offset(x.toFloat(), y.toFloat())) }
         if (saved != null) item("删除书签") {
             confirm("删除书签", "删除「${saved.name}」？", "删除", destructive = true) {
                 BrowserLibrary.removeBookmark(saved)
@@ -122,7 +122,7 @@ internal fun MainActivity.showReadingActions(site: Site, x: Int, y: Int) {
         item("在新标签中打开") { openReading(site, newTab = true) }
         item(if (read) "标记为未读" else "标记为已读") { BrowserLibrary.setRead(site, !read) }
         item("复制地址") { copy(site.url) }
-        item("共享") { share(site.url) }
+        item("共享") { share(site.url, site.name, androidx.compose.ui.geometry.Offset(x.toFloat(), y.toFloat())) }
         item("删除") { BrowserLibrary.removeReading(site) }
     }
 }
@@ -190,14 +190,14 @@ internal fun MainActivity.bindPageMenu(tab: Page, web: WebView) {
                     if (tablet && file != null) add(file)
                     if (!tab.secret) item("添加到阅读列表") { saveForLater(Site(link, link)) }
                     item("复制地址") { copy(link) }
-                    item("共享") { share(link) }
+                    item("共享") { share(link, title, androidx.compose.ui.geometry.Offset(x.toFloat(), y.toFloat())) }
                     if (tablet) add(foreground) else if (file != null) add(file)
                 }
                 if (image != null) {
                     item("在新标签中查看图片") { add(tab.secret, image) }
                     item("复制图片地址") { copy(image) }
                     item("下载图片") { download(tab, image, null, null) }
-                    if (link == null) item("共享图片地址") { share(image) }
+                    if (link == null) item("共享图片地址") { share(image, anchor=androidx.compose.ui.geometry.Offset(x.toFloat(), y.toFloat())) }
                 }
             }
             if (link != null && tablet) {

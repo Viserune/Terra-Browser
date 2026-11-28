@@ -7,6 +7,8 @@ import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.*
 import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.MutableTransitionState
@@ -148,6 +150,7 @@ private fun host(url: String) = Uri.parse(url).host.orEmpty()
             var tabletAddress by remember { mutableStateOf<Rect?>(null) }
             val tabletEditorBounds = remember { mutableStateOf<Rect?>(null) }
             var tabletPanelVisible by remember { mutableStateOf(false) }
+            var inlineHomeAddress by remember { mutableStateOf(false) }
             val editingTabletAddress by remember { derivedStateOf { tabletEditorBounds.value != null } }
             val measureAddress = Modifier.onGloballyPositioned { layout ->
                 val origin = layout.localToScreen(Offset.Zero)
@@ -168,11 +171,11 @@ private fun host(url: String) = Uri.parse(url).host.orEmpty()
             val editorVisibility = remember { MutableTransitionState(false) }
             SideEffect { editorVisibility.targetState = a.bookmarkDraft != null && a.sheet == "书签" }
             val editorVisible = a.bookmarkDraft != null || editorVisibility.currentState || !editorVisibility.isIdle
-            val libraryOverlay = a.sheet in librarySections && (editorVisible || a.contextMenu != null)
+            val libraryOverlay = a.sheet in librarySections && (editorVisible || a.contextMenu != null || a.sharedPage != null)
             val overlayScene = if (libraryOverlay) rememberCombinedLiquidKitBackdrop(libraryPageScene, libraryScene) else scene
             CompositionLocalProvider(LocalLiquidKitBackdrop provides scene) {
                 BoxWithConstraints(Modifier.fillMaxSize().liquidKitBackdrop(libraryPageScene, enabled = libraryOverlay)
-                    .then(if (editingTabletAddress || tabletPanelVisible) Modifier.clearAndSetSemantics {} else Modifier)
+                    .then(if (editingTabletAddress && !inlineHomeAddress || tabletPanelVisible) Modifier.clearAndSetSemantics {} else Modifier)
                     .safeDrawingPadding().imePadding().clipToBounds()) {
                     val tablet = maxWidth >= 650.dp
                     val canFold = p.url.isNotBlank() && p.error.isEmpty() && a.sheet.isEmpty() &&
@@ -196,7 +199,7 @@ private fun host(url: String) = Uri.parse(url).host.orEmpty()
                                 it.bottomClearance = if (tablet) 0 else if (compact) compactClearance else dockHeight
                                 it.display(a.browser(p))
                                 // LiquidKitSheet samples the modal host directly, including the live WebView.
-                                it.fullGlassScene = editingTabletAddress || tabletPanelVisible || a.contextMenu != null ||
+                                it.fullGlassScene = editingTabletAddress || tabletPanelVisible || a.contextMenu != null || a.sharedPage != null ||
                                     (a.sheet.isNotEmpty() && !phoneLibrary && a.sheet != "阅读器") || a.prompt != null
                                 it.readingToolbar.bind(p.takeIf { canFold })
                                 refresh.bind(p.web.takeIf { canFold && opening == null && a.contextMenu == null })
@@ -273,8 +276,11 @@ private fun host(url: String) = Uri.parse(url).host.orEmpty()
                 if (a.sheet == "下载项目") DownloadsPanel(a)
                 else if (phoneLibrary) PhoneLibrarySheet(a, a.sheet, recordLibrary)
                 else BrowserPanelWindow(a, recordLibrary, capture.takeIf { p.url.isNotBlank() && opening == null },
-                    tabletAddress, tabletEditorBounds) { tabletPanelVisible = it }
+                    tabletAddress, tabletEditorBounds, { inlineHomeAddress=it }) { tabletPanelVisible = it }
                 BookmarkEditor(a, overlayScene, editorVisibility)
+                CompositionLocalProvider(LocalLiquidKitBackdrop provides overlayScene) {
+                    SharePanel(a, dark, capture.takeIf { !libraryOverlay && p.url.isNotBlank() && opening == null })
+                }
                 a.prompt?.let { prompt ->
                     Dialog(onDismissRequest = { a.answer(prompt, false) }, properties = DialogProperties(
                         usePlatformDefaultWidth = false, decorFitsSystemWindows = false
@@ -344,10 +350,13 @@ private fun tabletAddressWidth(viewport: Dp) = (viewport * .44f).coerceAtMost(56
     BoxWithConstraints(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 4.dp)) {
         Row(Modifier.align(Alignment.CenterStart), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             SidebarButton("显示侧栏") { a.sheet = a.sidebarLocation }
-            LiquidKitGlassSurface {
+            LiquidKitGlassSurface(interactive=true) {
                 Row {
                     Tool(Icon.Back, "后退", p.back, size = 44.dp, hold = { x,y -> a.showNavigationHistory(p,true,x,y) }) { p.web?.goBack() }
-                    if (p.forward) Tool(Icon.Forward,"前进", size = 44.dp, hold = { x,y -> a.showNavigationHistory(p,false,x,y) }) { p.web?.goForward() }
+                    AnimatedVisibility(p.forward,enter=expandHorizontally(expandFrom=Alignment.Start)+fadeIn(),
+                        exit=shrinkHorizontally(shrinkTowards=Alignment.Start)+fadeOut()) {
+                        Tool(Icon.Forward,"前进", size = 44.dp, hold = { x,y -> a.showNavigationHistory(p,false,x,y) }) { p.web?.goForward() }
+                    }
                 }
             }
         }
@@ -355,7 +364,7 @@ private fun tabletAddressWidth(viewport: Dp) = (viewport * .44f).coerceAtMost(56
         if (!editingAddress) LiquidKitGlassSurface(Modifier.align(Alignment.Center).width(addressWidth).then(measureAddress)) {
             AddressRow(a, wide = true)
         }
-        LiquidKitGlassSurface(Modifier.align(Alignment.CenterEnd)) {
+        LiquidKitGlassSurface(Modifier.align(Alignment.CenterEnd),interactive=true) {
             var origin by remember { mutableStateOf(Offset.Zero) }
             Row(Modifier.onGloballyPositioned { origin = it.localToScreen(Offset.Zero) }.drawWithContent {
                 val panel = editorBounds.value
@@ -363,31 +372,55 @@ private fun tabletAddressWidth(viewport: Dp) = (viewport * .44f).coerceAtMost(56
                 else clipRect(panel.left-origin.x, panel.top-origin.y, panel.right-origin.x, panel.bottom-origin.y,
                     androidx.compose.ui.graphics.ClipOp.Difference) { this@drawWithContent.drawContent() }
             }) {
-                Tool(Icon.Share,"共享",p.url.isNotBlank(), size = 44.dp) { a.share(p.url) }
-                Tool(Icon.Add,"新建标签页", size = 44.dp) { a.add(p.secret) }
+                Box(Modifier.onGloballyPositioned {
+                    a.shareAnchor = it.localToScreen(Offset(it.size.width/2f, it.size.height.toFloat()))
+                }) { Tool(Icon.Share,"共享",p.url.isNotBlank(), size = 44.dp) { a.share(p.url, p.title) } }
+                Tool(Icon.Add,"新建标签页", size = 44.dp) {
+                    a.add(p.secret)
+                    if (a.page !== p) a.sheet = "地址"
+                }
                 Tool(Icon.SquareOnSquare,"标签页，${a.activeTabs.size} 个", size = 44.dp, hold = { x,y -> a.showTabActions(p,x,y) }) { a.sheet = "标签页" }
             }
         }
     }
-    val group = a.activeTabs
-    if (group.size < 2) return
+    val tabs = a.activeTabs
+    var recent by remember(p.secret,p.groupId) { mutableStateOf(tabs) }
+    SideEffect { if (tabs.size >= 2) recent=tabs }
+    AnimatedVisibility(tabs.size >= 2,enter=expandVertically(expandFrom=Alignment.Top)+fadeIn(tween(160)),
+        exit=shrinkVertically(shrinkTowards=Alignment.Top)+fadeOut(tween(120))) {
+        TabletTabStrip(a,if (tabs.size>=2) tabs else recent)
+    }
+}
+
+@Composable private fun TabletTabStrip(a: MainActivity, group: List<Page>) {
+    val p = a.page
     val list = rememberLazyListState()
     val tabScope = rememberCoroutineScope()
-    LaunchedEffect(p.id) {
-        if (list.layoutInfo.visibleItemsInfo.none { it.index == group.indexOf(p) }) list.animateScrollToItem(group.indexOf(p))
+    val selectedIndex=group.indexOf(p)
+    LaunchedEffect(p.id,selectedIndex) {
+        if (selectedIndex >= 0 && list.layoutInfo.visibleItemsInfo.none { it.index == selectedIndex })
+            list.animateScrollToItem(selectedIndex)
     }
     LiquidKitGlassSurface(Modifier.fillMaxWidth().padding(horizontal=10.dp,vertical=3.dp)) {
-        BoxWithConstraints(Modifier.fillMaxWidth().padding(2.dp)) {
-            val regularCount = group.count { !it.pinned }.coerceAtLeast(1)
-            val tabWidth = ((maxWidth - 50.dp * group.count { it.pinned }) / regularCount).coerceAtLeast(138.dp)
+        BoxWithConstraints(Modifier.fillMaxWidth().padding(2.dp).clip(RoundedCornerShape(20.dp))) {
+            val pinned=group.count { it.pinned }
+            val regularCount=(group.size-pinned).coerceAtLeast(1)
+            val tabWidth by animateDpAsState(((maxWidth-50.dp*pinned)/regularCount).coerceAtLeast(116.dp),
+                spring(dampingRatio=.9f,stiffness=470f),label="标签宽度")
+            fun start(index: Int)=50.dp*minOf(index,pinned)+tabWidth*(index-pinned).coerceAtLeast(0)
+            val shape = RoundedCornerShape(20.dp)
+            if (selectedIndex>=0) {
+                val position by animateDpAsState(start(selectedIndex),spring(dampingRatio=.91f,stiffness=460f),label="选中标签的位置")
+                val width by animateDpAsState(if (p.pinned) 50.dp else tabWidth,
+                    spring(dampingRatio=.91f,stiffness=460f),label="选中标签的宽度")
+                Box(Modifier.offset { IntOffset((position-start(list.firstVisibleItemIndex)).roundToPx()
+                    -list.firstVisibleItemScrollOffset,0) }.width(width).height(36.dp)
+                    .background(Card.current.copy(alpha=.44f),shape).border(.75.dp,Ink.current.copy(alpha=.12f),shape))
+            }
             LazyRow(state=list) {
                 items(group,key={ it.id }) { tab ->
                     val selected = tab === p
-                    val color by animateColorAsState(if (selected) Card.current.copy(alpha=.44f) else Color.Transparent)
-                    val shape = RoundedCornerShape(20.dp)
-                    val rim by animateColorAsState(if (selected) Ink.current.copy(alpha=.12f) else Color.Transparent)
                     Row(Modifier.animateItem().width(if (tab.pinned) 50.dp else tabWidth).height(36.dp).clip(shape)
-                        .background(color).border(.75.dp,rim,shape)
                         .then(tabMenuGesture(Role.Tab, { a.select(tab) }) { x, y ->
                             a.contextMenu = a.tabCardMenu(tab, x, y, { a.sheet.isEmpty() }) {
                                 val target = a.activeTabs.indexOf(tab)
@@ -395,11 +428,15 @@ private fun tabletAddressWidth(viewport: Dp) = (viewport * .44f).coerceAtMost(56
                             }
                         }).semantics { if (tab.pinned) contentDescription = "已固定，${tab.title.ifBlank { host(tab.url) }}" },
                         verticalAlignment = Alignment.CenterVertically) {
-                        if (selected && !tab.pinned) Box(Modifier.size(44.dp).clickable(role=Role.Button) { a.close(tab) }
+                        AnimatedVisibility(selected && !tab.pinned,
+                            enter=expandHorizontally(expandFrom=Alignment.Start)+fadeIn(tween(130)),
+                            exit=shrinkHorizontally(shrinkTowards=Alignment.Start)+fadeOut(tween(90))) {
+                          Box(Modifier.size(40.dp).clickable(enabled=selected,role=Role.Button) { a.close(tab) }
                             .semantics { contentDescription = "关闭标签页" },contentAlignment=Alignment.Center) {
                             Box(Modifier.size(14.dp).background(Ink.current, RoundedCornerShape(7.dp)), contentAlignment=Alignment.Center) {
                                 LiquidKitIcon(Icon.Close, Card.current, Modifier.size(10.dp))
                             }
+                          }
                         }
                         Box(Modifier.weight(1f).padding(horizontal=6.dp),contentAlignment=Alignment.Center) {
                             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -422,7 +459,8 @@ private fun tabletAddressWidth(viewport: Dp) = (viewport * .44f).coerceAtMost(56
 }
 
 @Composable private fun BrowserPanelWindow(a: MainActivity, recordLibrary: Modifier, capture: WebGlassCapture?,
-    tabletAddress: Rect?, tabletEditorBounds: MutableState<Rect?>, onTabletPanelVisible: (Boolean) -> Unit) {
+    tabletAddress: Rect?, tabletEditorBounds: MutableState<Rect?>, onInlineAddress: (Boolean) -> Unit,
+    onTabletPanelVisible: (Boolean) -> Unit) {
     if (a.sheet == "页面缩放") return
     if (a.sheet == "标签页") {
         TabOverview(a)
@@ -448,9 +486,9 @@ private fun tabletAddressWidth(viewport: Dp) = (viewport * .44f).coerceAtMost(56
             onDispose { onTabletPanelVisible(false) }
         }
         AnimatedVisibility(visibleState = transition, enter = EnterTransition.None, exit = ExitTransition.None,
-            modifier = Modifier.fillMaxSize().semantics { paneTitle = if (displayed == "地址") "地址栏" else displayed }) {
+            modifier = Modifier.fillMaxSize().then(if (displayed=="地址") Modifier else Modifier.semantics { paneTitle=displayed })) {
             when (displayed) {
-                "地址" -> AddressEditor(a, capture, tabletAddress, tabletEditorBounds)
+                "地址" -> AddressEditor(a, capture, tabletAddress, tabletEditorBounds, onInlineAddress)
                 "页面菜单" -> PageMenu(a, capture)
                 else -> LibrarySidebar(a, displayed, recordLibrary, capture)
             }
@@ -467,7 +505,7 @@ private fun tabletAddressWidth(viewport: Dp) = (viewport * .44f).coerceAtMost(56
                 else fadeOut(tween(120)) + slideOutVertically(tween(150)) { it/12 }) {
             when (displayed) {
                 "页面菜单" -> PageMenu(a, capture)
-                "地址" -> AddressEditor(a, capture, tabletAddress, tabletEditorBounds)
+                "地址" -> AddressEditor(a, capture, tabletAddress, tabletEditorBounds, onInlineAddress)
                 "阅读器" -> a.page.readerArticle?.let { article -> key(article) { ReaderScreen(a, a.page, article) } }
                 else -> Panel(a, displayed)
             }
@@ -598,7 +636,12 @@ private fun tabletAddressWidth(viewport: Dp) = (viewport * .44f).coerceAtMost(56
 }
 
 @Composable private fun Home(a: MainActivity) {
-    Column(Modifier.fillMaxSize().semantics { contentDescription = if (a.page.secret) "无痕起始页" else "起始页" }.verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 12.dp),
+    val reveal=remember(a.page.id) { Animatable(if (a.sheet=="地址") 0f else 1f) }
+    LaunchedEffect(reveal) { if (reveal.value<1f) reveal.animateTo(1f,tween(285,easing=CubicBezierEasing(.18f,.74f,.28f,1f))) }
+    Column(Modifier.fillMaxSize().graphicsLayer {
+        alpha=reveal.value
+        translationY=(1f-reveal.value)*12.dp.toPx()
+    }.semantics { contentDescription = if (a.page.secret) "无痕起始页" else "起始页" }.verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Label(if (a.page.secret) "无痕浏览" else "个人收藏", 22, bold = true)
@@ -651,7 +694,6 @@ private fun tabletAddressWidth(viewport: Dp) = (viewport * .44f).coerceAtMost(56
     }
     val threshold = with(LocalDensity.current) { 46.dp.toPx() }
     Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-        if (p.progress in 1..99) Box(Modifier.fillMaxWidth().height(2.dp)) { Spacer(Modifier.fillMaxWidth(p.progress / 100f).fillMaxHeight().background(Accent.current)) }
         BoxWithConstraints(Modifier.fillMaxWidth().padding(top = 4.dp)) {
             val width = maxWidth
             val touchArea = Modifier.fillMaxWidth().pointerInput(p.id) {
@@ -729,7 +771,7 @@ private fun tabletAddressWidth(viewport: Dp) = (viewport * .44f).coerceAtMost(56
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceAround) {
             Tool(Icon.Back, "后退", p.back, hold = { x, y -> a.showNavigationHistory(p, true, x, y) }) { p.web?.goBack() }
             Tool(Icon.Forward, "前进", p.forward, hold = { x, y -> a.showNavigationHistory(p, false, x, y) }) { p.web?.goForward() }
-            Tool(Icon.Share, "共享", p.url.isNotEmpty()) { a.share(p.url) }
+            Tool(Icon.Share, "共享", p.url.isNotEmpty()) { a.share(p.url, p.title) }
             Tool(Icon.Bookmark, "书签") { a.sheet = "书签" }
             Tool(Icon.SquareOnSquare, "标签页，${a.activeTabs.size} 个", hold = { x, y -> a.showTabActions(p, x, y) }) {
                 a.sheet = "标签页"
@@ -752,44 +794,77 @@ private fun addressLabel(p: Page) = if (p.url.isEmpty()) "搜索或输入网址"
     var menuButton by remember { mutableStateOf<LayoutCoordinates?>(null) }
     fun menuAnchor(c: LayoutCoordinates) = c.localToScreen(Offset(c.size.width/2f,c.size.height.toFloat()))
     val side = Modifier.width(48.dp*(1f-fold)).fillMaxHeight().clipToBounds().graphicsLayer { alpha=1f-fold }
-    Row(Modifier.fillMaxWidth().height(lerp(if (wide) 44.dp else 50.dp,28.dp,fold)), verticalAlignment = Alignment.CenterVertically) {
-        if (fold < 1f) Box(side.onGloballyPositioned {
-            menuButton = it
-            if (a.sheet == "页面菜单") a.pageMenuAnchor = menuAnchor(it)
-        }.clip(RoundedCornerShape(24.dp)).control("页面菜单") {
-            a.pageMenuAnchor = menuButton?.takeIf { it.isAttached }?.let(::menuAnchor)
-            a.sheet = "页面菜单"
-        },
-            contentAlignment = Alignment.Center) { LiquidKitIcon(if (wide) Icon.List else Icon.More, Ink.current) }
-        if (fold < 1f && a.downloads.ids(p.secret).isNotEmpty()) {
-            Box(side.liquidKitPopoverAnchor(a.downloadAnchor).clip(RoundedCornerShape(24.dp))
-                .control("查看下载") { a.sheet = "下载项目" }, contentAlignment = Alignment.Center) {
-                LiquidKitIcon(Icon.Download, Accent.current)
+    Box(Modifier.fillMaxWidth().height(lerp(if (wide) 44.dp else 50.dp,28.dp,fold))) {
+        Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
+            if (fold < 1f) Box(side.onGloballyPositioned {
+                menuButton = it
+                if (a.sheet == "页面菜单") a.pageMenuAnchor = menuAnchor(it)
+            }.clip(RoundedCornerShape(24.dp)).control("页面菜单") {
+                a.pageMenuAnchor = menuButton?.takeIf { it.isAttached }?.let(::menuAnchor)
+                a.sheet = "页面菜单"
+            },
+                contentAlignment = Alignment.Center) { LiquidKitIcon(if (wide) Icon.List else Icon.More, Ink.current) }
+            if (fold < 1f && a.downloads.ids(p.secret).isNotEmpty()) {
+                Box(side.liquidKitPopoverAnchor(a.downloadAnchor).clip(RoundedCornerShape(24.dp))
+                    .control("查看下载") { a.sheet = "下载项目" }, contentAlignment = Alignment.Center) {
+                    LiquidKitIcon(Icon.Download, Accent.current)
+                }
+            }
+            val address = addressLabel(p)
+            val edit = if (fold < 1f) addressGesture(a,p) { a.sheet = "地址" }
+                .semantics { contentDescription = address } else Modifier
+            Box(Modifier.weight(1f).fillMaxHeight().then(edit),contentAlignment=Alignment.Center) {
+                BasicText(address, style=TextStyle(color=Ink.current,fontSize=(15f-2f*fold).sp,
+                    fontWeight=if (!wide && p.url.isNotEmpty()) FontWeight.SemiBold else FontWeight.Normal),
+                    maxLines=1,overflow=TextOverflow.Ellipsis)
+            }
+            val loading = p.progress < 100
+            if (fold < 1f) Box(side.clip(RoundedCornerShape(24.dp))
+                .control(if (loading) "停止载入" else "重新载入", p.url.isNotEmpty()) {
+                    p.web?.let { web ->
+                        if (loading) {
+                            web.stopLoading()
+                            (web.parent as? TabViewport)?.cancelLinkNavigation(web)
+                            (web.parent as? TabViewport)?.pullRefresh?.loaded(web)
+                        } else web.reload()
+                    }
+                }, contentAlignment = Alignment.Center) {
+                Crossfade(loading,animationSpec=tween(145),label="载入按钮") { loadingIcon ->
+                    LiquidKitIcon(if (loadingIcon) Icon.Close else Icon.Reload,
+                        if (p.url.isNotEmpty()) Ink.current else Muted.current.copy(alpha=.45f))
+                }
             }
         }
-        val address = addressLabel(p)
-        val edit = if (fold < 1f) addressGesture(a,p) { a.sheet = "地址" }
-            .semantics { contentDescription = address } else Modifier
-        Box(Modifier.weight(1f).fillMaxHeight().then(edit),contentAlignment=Alignment.Center) {
-            BasicText(address, style=TextStyle(color=Ink.current,fontSize=(15f-2f*fold).sp,
-                fontWeight=if (!wide && p.url.isNotEmpty()) FontWeight.SemiBold else FontWeight.Normal),
-                maxLines=1,overflow=TextOverflow.Ellipsis)
-        }
-        val loading = p.progress < 100
-        if (fold < 1f) Box(side.clip(RoundedCornerShape(24.dp))
-            .control(if (loading) "停止载入" else "重新载入", p.url.isNotEmpty()) {
-                p.web?.let { web ->
-                    if (loading) {
-                        web.stopLoading()
-                        (web.parent as? TabViewport)?.cancelLinkNavigation(web)
-                        (web.parent as? TabViewport)?.pullRefresh?.loaded(web)
-                    } else web.reload()
-                }
-            }, contentAlignment = Alignment.Center) {
-            LiquidKitIcon(if (loading) Icon.Close else Icon.Reload,
-                if (p.url.isNotEmpty()) Ink.current else Muted.current.copy(alpha = .45f))
+        key(p.id) {
+            AddressLoadProgress(p.progress,Modifier.align(Alignment.BottomCenter).fillMaxWidth()
+                .padding(horizontal=13.dp).height(2.dp).graphicsLayer { alpha=1f-fold })
         }
     }
+}
+
+@Composable private fun AddressLoadProgress(progress: Int, modifier: Modifier) {
+    val length = remember { Animatable(0f) }
+    val opacity = remember { Animatable(0f) }
+    var previous by remember { mutableIntStateOf(100) }
+    LaunchedEffect(progress) {
+        val restarted = progress < previous
+        previous = progress
+        if (progress < 100) {
+            if (restarted) length.snapTo(0f)
+            opacity.snapTo(1f)
+            length.animateTo((progress/100f).coerceIn(.035f,.98f),tween(170))
+        } else if (opacity.value > 0f) {
+            length.animateTo(1f,tween(135))
+            opacity.animateTo(0f,tween(180))
+            length.snapTo(0f)
+        }
+    }
+    val color=Accent.current
+    Spacer(modifier.drawBehind {
+        val width=size.width*length.value
+        val left=if (layoutDirection==LayoutDirection.Rtl) size.width-width else 0f
+        drawRect(color,Offset(left,0f),androidx.compose.ui.geometry.Size(width,size.height),alpha=opacity.value)
+    })
 }
 
 @Composable private fun Input(value: TextFieldValue, hint: String, set: (TextFieldValue) -> Unit, modifier: Modifier, editing: Boolean, submit: () -> Unit) {
@@ -801,7 +876,7 @@ private fun addressLabel(p: Page) = if (p.url.isEmpty()) "搜索或输入网址"
         singleLine = true, textStyle = TextStyle(color = Ink.current,fontSize = 17.sp), cursorBrush = SolidColor(Accent.current),
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Go),
         keyboardActions = KeyboardActions(onGo = { submit() }),
-        decorationBox = { field -> Box { if (value.text.isEmpty()) Label(hint, 16, Muted.current); field() } })
+        decorationBox = { field -> Box { if (value.text.isEmpty()) Label("搜索或输入网址",16,Muted.current); field() } })
     LaunchedEffect(editing, windowFocused) {
         if (editing && windowFocused) {
             focus.requestFocus()
@@ -877,7 +952,7 @@ private fun addressLabel(p: Page) = if (p.url.isEmpty()) "搜索或输入网址"
 }
 
 @Composable private fun AnimatedVisibilityScope.AddressEditor(a: MainActivity, capture: WebGlassCapture?,
-    tabletAddress: Rect?, tabletEditorBounds: MutableState<Rect?>) {
+    tabletAddress: Rect?, tabletEditorBounds: MutableState<Rect?>, onInlineAddress: (Boolean) -> Unit) {
     val page = a.page
     var query by remember(page.id) { mutableStateOf(TextFieldValue(page.url, TextRange(0, page.url.length))) }
     var edited by remember(page.id) { mutableStateOf(false) }
@@ -945,7 +1020,12 @@ private fun addressLabel(p: Page) = if (p.url.isEmpty()) "搜索或输入网址"
         panelOrigin = it.localToScreen(Offset.Zero)
     }) {
         val tablet = maxWidth >= 650.dp
-        val favoritesVisible = tablet && !page.secret && !keyboardChoices && BrowserLibrary.favorites.isNotEmpty() &&
+        val inlineHome = tablet && page.url.isBlank() && text.isEmpty()
+        DisposableEffect(inlineHome) {
+            onInlineAddress(inlineHome)
+            onDispose { onInlineAddress(false) }
+        }
+        val favoritesVisible = tablet && page.url.isNotBlank() && !page.secret && !keyboardChoices && BrowserLibrary.favorites.isNotEmpty() &&
             (text.isEmpty() || (!edited && text == page.url))
         val panelWidth = if (tablet) minOf(maxWidth * .75f, 620.dp) else maxWidth - 16.dp
         val suggestionsHeight = (maxHeight - 88.dp).coerceIn(0.dp, 340.dp)
@@ -965,7 +1045,7 @@ private fun addressLabel(p: Page) = if (p.url.isEmpty()) "搜索或输入网址"
         var lastDark by remember { mutableStateOf(sampledDark) }
         if (a.sheet == "地址") SideEffect { lastDark = sampledDark }
         val dark = if (a.sheet == "地址") sampledDark else lastDark
-        Box(Modifier.fillMaxSize().clickable(remember { MutableInteractionSource() }, null) {
+        if (!inlineHome) Box(Modifier.fillMaxSize().clickable(remember { MutableInteractionSource() }, null) {
             keyboard?.hide()
             a.sheet = ""
         })
@@ -998,6 +1078,8 @@ private fun addressLabel(p: Page) = if (p.url.isEmpty()) "搜索或输入网址"
             }
         }
         if (tablet) {
+            val suggestionsExtent by animateFloatAsState(if (inlineHome) 0f else 1f,
+                tween(245,easing=CubicBezierEasing(.18f,.72f,.28f,1f)),label="起始页输入建议")
             val expansion by transition.animateFloat(transitionSpec={
                 if (targetState == EnterExitState.Visible) tween(410, easing=CubicBezierEasing(.16f,.82f,.23f,1f))
                 else if (dismissedWithEscape) snap()
@@ -1016,7 +1098,8 @@ private fun addressLabel(p: Page) = if (p.url.isEmpty()) "搜索或输入网址"
             val startWidth = with(density) { source?.width?.toDp() } ?: tabletAddressWidth(maxWidth)
             val startHeight = with(density) { source?.height?.toDp() } ?: 44.dp
             val startTop = with(density) { panelOrigin?.let { origin -> source?.let { (it.top-origin.y).toDp() } } } ?: 4.dp
-            val width = lerp(startWidth.coerceIn(1.dp,maxWidth), panelWidth, expansion).coerceIn(1.dp,maxWidth)
+            val extent = expansion*suggestionsExtent
+            val width = lerp(startWidth.coerceIn(1.dp,maxWidth), panelWidth, extent).coerceIn(1.dp,maxWidth)
             val screenHeight = with(density) { LocalWindowInfo.current.containerSize.height.toDp() }
             val favoritesHeight = (minOf(728.dp, screenHeight*.64f, maxHeight-12.dp)-48.dp).coerceAtLeast(0.dp)
             CompositionLocalProvider(Ink provides if (dark) Color.White else Color.Black,
@@ -1024,7 +1107,7 @@ private fun addressLabel(p: Page) = if (p.url.isEmpty()) "搜索或输入网址"
                 Accent provides if (dark) Color(0xffe2f1ff) else Color(0xff0066cc)) {
                 LiquidKitTheme(opacity=.28f,dark=dark) {
                     DialogGlassSurface(capture, Modifier.align(Alignment.TopCenter)
-                        .offset(y=lerp(startTop,6.dp,expansion)).width(width).onGloballyPositioned {
+                        .offset(y=lerp(startTop,6.dp,extent)).width(width).semantics { paneTitle="地址栏" }.onGloballyPositioned {
                             tabletEditorBounds.value = Rect(it.localToScreen(Offset.Zero),it.size.toSize())
                         },
                         shape=RoundedCornerShape(23.dp), tint=if (dark) Color.Black.copy(alpha=.34f) else Color.White.copy(alpha=.58f),
@@ -1032,7 +1115,7 @@ private fun addressLabel(p: Page) = if (p.url.isEmpty()) "搜索或输入网址"
                         Column(Modifier.clipToBounds().layout { measurable, constraints ->
                             val child = measurable.measure(constraints)
                             val start = startHeight.toPx()
-                            val height = constraints.constrainHeight((start+(child.height-start)*expansion).roundToInt())
+                            val height = constraints.constrainHeight((start+(child.height-start)*extent).roundToInt())
                             layout(child.width,height) { child.place(0,0) }
                         }.graphicsLayer { alpha=expansion.coerceIn(0f,1f) }) {
                             field()
@@ -1247,7 +1330,7 @@ internal val librarySections = setOf(sidebarHome, "书签", "阅读列表", "历
     val actions = buildList {
         add(LiquidKitSwipeAction("删除", Icon.Trash, Color(0xffc83135)) { remove() })
         if (kind == "书签") add(LiquidKitSwipeAction("编辑", Icon.Rename, Color(0xff536879)) { a.editBookmark(site) })
-        add(LiquidKitSwipeAction("共享", Icon.Share, Color(0xff346fa5)) { a.share(site.url) })
+        add(LiquidKitSwipeAction("共享", Icon.Share, Color(0xff346fa5)) { a.share(site.url, site.name) })
     }
     val gesture = when (kind) {
         "书签" -> tabMenuGesture(Role.Button, open, "显示书签菜单") { x,y -> a.showBookmarkActions(site,x,y,inLibrary=true) }

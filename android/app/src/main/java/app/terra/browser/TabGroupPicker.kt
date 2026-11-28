@@ -1,6 +1,13 @@
 package app.terra.browser
 
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.AnimatedContentTransitionScope.SlideDirection
+import androidx.compose.animation.togetherWith
+import androidx.compose.animation.core.tween
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
@@ -48,46 +55,78 @@ internal fun TabGroupPicker(a: MainActivity, current: String, target: Page?, dar
     var panel by remember { mutableStateOf(if (createForLink == null) GroupPanel.List else GroupPanel.Create) }
     var name by remember { mutableStateOf("") }
     val source = target?.groupId ?: current
-    fun back() { if (panel == GroupPanel.List || createForLink != null) dismiss() else panel = GroupPanel.List }
+    var afterExit by remember { mutableStateOf<(() -> Unit)?>(null) }
+    fun finish(action: () -> Unit = dismiss) {
+        if (afterExit == null) afterExit = action
+    }
+    fun back() {
+        if (afterExit != null) return
+        if (panel == GroupPanel.List || createForLink != null) finish() else panel = GroupPanel.List
+    }
     fun choose(id: String) {
-        if (target != null) a.moveTab(target, id)
-        onSelect(id)
-        dismiss()
+        finish {
+            if (target != null) a.moveTab(target, id)
+            onSelect(id)
+            dismiss()
+        }
     }
     fun submit() {
-        if (name.isBlank()) return
-        if (createForLink != null) {
-            createForLink(name.trim())
-            return
+        val title = name.trim()
+        val creating = panel == GroupPanel.Create
+        if (title.isEmpty() || !creating && current !in a.tabGroups) return
+        finish {
+            if (createForLink != null) createForLink(title) else {
+                val id = if (creating) a.createGroup(title, target) else {
+                    a.tabGroups[current] = title
+                    a.save()
+                    current
+                }
+                onSelect(id)
+                dismiss()
+            }
         }
-        val id = if (panel == GroupPanel.Create) a.createGroup(name, target) else {
-            if (current !in a.tabGroups) return
-            a.tabGroups[current] = name.trim()
-            a.save()
-            current
-        }
-        onSelect(id)
+    }
+    fun remove(closePages: Boolean) = finish {
+        a.removeGroup(current, closePages)
+        onSelect("")
         dismiss()
     }
     Dialog(onDismissRequest=::back, properties=DialogProperties(usePlatformDefaultWidth=false, decorFitsSystemWindows=false)) {
         val window = (LocalView.current.parent as? DialogWindowProvider)?.window
-        SideEffect { window?.setDimAmount(.18f) }
+        SideEffect {
+            window?.setDimAmount(0f)
+            window?.setWindowAnimations(0)
+        }
         val entry = remember { Animatable(0f) }
-        LaunchedEffect(Unit) { entry.animateTo(1f, spring(dampingRatio=.87f, stiffness=420f)) }
+        LaunchedEffect(afterExit) {
+            val action = afterExit
+            if (action == null) entry.animateTo(1f, spring(dampingRatio=.87f, stiffness=420f))
+            else {
+                entry.animateTo(0f, tween(210))
+                action()
+            }
+        }
         BoxWithConstraints(Modifier.fillMaxSize()) {
-            Box(Modifier.fillMaxSize().clickable(interactionSource=null, indication=null) { back() })
+            Box(Modifier.fillMaxSize().drawBehind {
+                drawRect(Color.Black.copy(alpha=.18f * entry.value.coerceIn(0f,1f)))
+            }.clickable(interactionSource=null, indication=null) { back() })
             val tablet = maxWidth >= 600.dp
             val sheetHeight = maxHeight * .7f
             Box(Modifier.fillMaxSize().safeDrawingPadding().imePadding().padding(12.dp),
                 contentAlignment=if (tablet) Alignment.Center else Alignment.BottomCenter) {
                 LiquidKitGlassSurface(Modifier.widthIn(max=408.dp).fillMaxWidth().heightIn(max=sheetHeight)
                     .graphicsLayer {
-                        alpha=entry.value
-                        translationY=(1f-entry.value)*36.dp.toPx()
-                        scaleX=.96f+.04f*entry.value
+                        alpha=if (tablet) entry.value.coerceIn(0f,1f) else 1f
+                        translationY=(1f-entry.value) * if (tablet) 14.dp.toPx() else size.height + 24.dp.toPx()
+                        transformOrigin=TransformOrigin(.5f, if (tablet) .5f else 1f)
+                        scaleX=if (tablet) .92f+.08f*entry.value else 1f
                         scaleY=scaleX
                     },shape=RoundedCornerShape(26.dp),tint=sheetTint.copy(alpha=.72f)) {
-                    AnimatedContent(panel,label="标签组面板") { mode ->
+                    AnimatedContent(panel,transitionSpec={
+                        val direction = if (targetState == GroupPanel.List) SlideDirection.End else SlideDirection.Start
+                        (slideIntoContainer(direction,tween(280)) { it * 2 / 3 } + fadeIn(tween(200))) togetherWith
+                            (slideOutOfContainer(direction,tween(240)) { it / 3 } + fadeOut(tween(150)))
+                    },label="标签组面板") { mode ->
                         Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(16.dp)) {
                             val title = when (mode) {
                                 GroupPanel.List -> if (target == null) "标签组" else "移至标签组"
@@ -139,11 +178,9 @@ internal fun TabGroupPicker(a: MainActivity, current: String, target: Page?, dar
                                 }
                                 GroupPanel.Dissolve -> {
                                     BasicText("保留的页面将移回普通标签。",Modifier.padding(vertical=10.dp),style=TextStyle(color=ink,fontSize=16.sp))
-                                    GroupAction("保留组内标签页",blue) { a.removeGroup(current, closePages=false); onSelect(""); dismiss() }
+                                    GroupAction("保留组内标签页",blue) { remove(false) }
                                     GroupAction("删除组并关闭标签页",if (dark) Color(0xffff9994) else Color(0xffa72523)) {
-                                        a.removeGroup(current, closePages=true)
-                                        onSelect("")
-                                        dismiss()
+                                        remove(true)
                                     }
                                 }
                             }

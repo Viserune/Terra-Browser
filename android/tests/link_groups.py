@@ -31,6 +31,13 @@ def verify_link_groups(shell, locate, adb, shot, port, prefix, movie):
         locate(branch)
     def overview():
         tap("标签页，", True)
+    def painted_preview(label):
+        end=time.monotonic()+8
+        while time.monotonic()<end:
+            bounds=preview_bounds(shot(label))
+            if bounds: return bounds
+            time.sleep(.15)
+        raise AssertionError("The Garden preview did not paint in "+label)
 
     shell("am","force-stop","app.terra.browser")
     shell("am","start","-W","-n","app.terra.browser/.MainActivity")
@@ -83,10 +90,10 @@ def verify_link_groups(shell, locate, adb, shot, port, prefix, movie):
     release = start
     try:
         item = locate(branch)
-        original = preview_bounds(shot("link-root-menu"))
+        original = painted_preview("link-root-menu")
         shell("input","motionevent","MOVE",*item)
         release = locate(name)
-        opened = preview_bounds(shot("link-group-menu"))
+        opened = painted_preview("link-group-menu")
         assert original and opened and max(abs(a-b) for a,b in zip(original,opened)) <= 2, (original,opened)
         shell("input","motionevent","MOVE",*release)
         time.sleep(.2)
@@ -109,7 +116,12 @@ def verify_link_groups(shell, locate, adb, shot, port, prefix, movie):
     shell("input","text", base+"/tab-menu")
     locate(base+"/tab-menu")
     shell("input","keyevent","ENTER")
+    # The inline address keyboard is retracting after Enter. Use the final link position.
     xy = locate("Continue")
+    for _ in range(5):
+        settled = locate("Continue")
+        if settled == xy: break
+        xy = settled
     shell("input","swipe",*xy,*xy,750)
     locate("打开")
     assert branch not in labels() and name not in labels()

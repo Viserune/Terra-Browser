@@ -16,6 +16,16 @@
 
 手势、菜单、地址栏输入和全屏视频的设备回归脚本位于 `tests`。请在已安装应用的测试设备上运行，具体参数见各脚本开头。
 
+平板标签总览的布局和动画对照了 iPad Safari 实录。可在 820 × 1180、160 dpi 的竖屏专用模拟器上运行下面的命令。脚本使用六个不同颜色的网页，检查预览的位置和比例、展开与收回的中间画面、从总览新建标签及关闭卡片后相邻预览的移动。电脑端需要 Python、Pillow、NumPy 和 OpenCV。
+
+```sh
+python tests/safari_motion.py emulator-5554 --tablet --tablet-overview-motion --screens screenshots --menu-record tabs.mp4
+```
+
+加上 `--inspect-overview-frames` 可用四倍动画时长检查中间画面，结束后脚本会恢复模拟器原来的设置。使用 `--address-loading` 可单独检查地址栏里的载入进度和完成后的淡出。
+
+在专用模拟器运行 `python tests/safari_motion.py 设备序列号 --share-panel --screens screenshots` 可验证共享面板展开、收回、格式切换、拷贝和书签草稿，以及文本和网页归档交给系统选择器的过程。平板加上 `--tablet`，会额外检查面板锚点和面板外网页的亮度。两种布局均可加 `--menu-record share.mp4` 录屏。
+
 手机地址栏支持跟手切换标签。平板宽度足够时使用顶部工具栏和标签条。长按链接可以预览、隐藏预览或打开目标。页面菜单可手动收起工具栏，再点域名恢复。
 
 玻璃使用 LiquidKit 1.0.0-alpha.3 和匹配的 Backdrop。WebView 提供背景像素，LiquidKit 负责折射、模糊和高光。完整运行时着色效果需要 Android 13 及以上。 两个 AAR 均来自 [LiquidKit v1.0.0-alpha.3 发布页](https://github.com/egysoloman/LiquidKit/releases/tag/v1.0.0-alpha.3)，可与发布附件列出的 SHA-256 核对。

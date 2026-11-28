@@ -5,6 +5,8 @@ import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import android.view.PixelCopy
+import android.view.View
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.resume
@@ -14,6 +16,7 @@ import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
@@ -30,6 +33,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.lerp
@@ -40,6 +44,7 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.customActions
@@ -52,12 +57,31 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.*
 import androidx.compose.ui.window.*
 import androidx.core.view.WindowCompat
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import io.liquidkit.*
 import kotlinx.coroutines.flow.first
 import kotlin.math.roundToInt
 
 private data class OverviewCard(val tab: Page, val image: State<ImageBitmap?>, val rect: Rect)
-private data class OverviewFlight(val card: OverviewCard, val openingPage: Boolean)
+private class OverviewFlight(val card: OverviewCard, val openingPage: Boolean) {
+    private val drawn=CompletableDeferred<Unit>()
+    private val committed=CompletableDeferred<Unit>()
+
+    fun presentedBy(view: View) {
+        if (!drawn.complete(Unit)) return
+        val observer=view.viewTreeObserver
+        if (view.isHardwareAccelerated && observer.isAlive) {
+            observer.registerFrameCommitCallback { committed.complete(Unit) }
+            view.postInvalidateOnAnimation()
+        } else committed.complete(Unit)
+    }
+
+    suspend fun awaitSourceFrame() {
+        drawn.await()
+        withTimeoutOrNull(300) { committed.await() }
+    }
+}
 
 @Composable
 private fun overviewImage(a: MainActivity, tab: Page, current: Boolean): State<ImageBitmap?> {
@@ -75,16 +99,21 @@ private fun overviewImage(a: MainActivity, tab: Page, current: Boolean): State<I
     }
 }
 
-private suspend fun captureStartPage(a: MainActivity): ImageBitmap? {
+private suspend fun captureBrowserFrame(a: MainActivity, contentOnly: Boolean): ImageBitmap? {
     val root = a.window.decorView
     if (root.width == 0 || root.height == 0 || !root.isAttachedToWindow) return null
-    val scale = minOf(1f, 500f / root.width, 950f / root.height)
-    val image = Bitmap.createBitmap((root.width*scale).roundToInt().coerceAtLeast(1),
-        (root.height*scale).roundToInt().coerceAtLeast(1),Bitmap.Config.ARGB_8888)
+    val bars = if (contentOnly) ViewCompat.getRootWindowInsets(root)?.getInsets(
+        WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()) else null
+    val source = android.graphics.Rect(bars?.left ?: 0,bars?.top ?: 0,
+        root.width-(bars?.right ?: 0),root.height-(bars?.bottom ?: 0))
+    if (source.isEmpty) return null
+    val scale = minOf(1f, 640f / source.width(), 1000f / source.height())
+    val image = Bitmap.createBitmap((source.width()*scale).roundToInt().coerceAtLeast(1),
+        (source.height()*scale).roundToInt().coerceAtLeast(1),Bitmap.Config.ARGB_8888)
     return withTimeoutOrNull(250) {
         suspendCancellableCoroutine { continuation ->
             try {
-                PixelCopy.request(a.window,image,{ status ->
+                PixelCopy.request(a.window,source,image,{ status ->
                     if (continuation.isActive) continuation.resume(if(status == PixelCopy.SUCCESS) image.asImageBitmap() else null)
                 },Handler(Looper.getMainLooper()))
             } catch (_: IllegalArgumentException) { continuation.resume(null) }
@@ -153,21 +182,19 @@ internal fun PinIcon(color: Color, modifier: Modifier) {
 }
 
 @Composable
-private fun ArrangeTabsButton(ink: Color, show: (Int, Int) -> Unit) {
+private fun overviewOptions(show: (Int, Int) -> Unit): Modifier {
     var anchor by remember { mutableStateOf<LayoutCoordinates?>(null) }
-    Box(Modifier.size(48.dp).onGloballyPositioned { anchor = it }
+    return Modifier.onGloballyPositioned { anchor = it }
         .clickable(role = Role.Button) {
             anchor?.takeIf { it.isAttached }?.let {
                 val point = it.localToScreen(Offset(it.size.width / 2f, it.size.height.toFloat()))
                 show(point.x.roundToInt(), point.y.roundToInt())
             }
-        }.semantics { contentDescription = "排列标签页" }, contentAlignment = Alignment.Center) {
-        LiquidKitIcon(LiquidKitSymbol.ChevronUpDown, ink)
-    }
+        }.semantics { contentDescription = "排列标签页" }
 }
 
 @Composable
-private fun PageFace(tab: Page, image: ImageBitmap?, surface: Color, ink: Color) {
+internal fun PageFace(tab: Page, image: ImageBitmap?, surface: Color, ink: Color) {
     Box(Modifier.fillMaxSize().background(surface),contentAlignment=Alignment.Center) {
         if (image != null) Image(image,null,Modifier.fillMaxSize(),alignment=Alignment.TopCenter,contentScale=ContentScale.Crop)
         else Column(horizontalAlignment=Alignment.CenterHorizontally,verticalArrangement=Arrangement.spacedBy(8.dp)) {
@@ -233,7 +260,7 @@ private fun CardHeader(tab: Page, ink: Color, modifier: Modifier = Modifier, clo
 }
 
 @Composable
-private fun DraggedTab(controller: GridTabReorder, drag: LiftedTab, surface: Color, ink: Color) {
+private fun DraggedTab(controller: GridTabReorder, drag: LiftedTab, surface: Color, ink: Color, tablet: Boolean, aspect: Float) {
     val density = LocalDensity.current
     val landed = remember(drag) { Animatable(0f) }
     val lift = remember(drag) { Animatable(0f) }
@@ -256,15 +283,19 @@ private fun DraggedTab(controller: GridTabReorder, drag: LiftedTab, surface: Col
             scaleY = scaleX
             shadowElevation = 10.dp.toPx()*lift.value*(1f-landed.value)
             this.shape = shape
-            clip = true
-        }.background(surface)) {
-        CardHeader(drag.tab, ink)
-        if (!drag.tab.pinned) Box(Modifier.fillMaxSize().padding(2.dp)) { PageFace(drag.tab, drag.preview.value, surface, ink) }
+            clip = !tablet || drag.tab.pinned
+        }.background(if (tablet && !drag.tab.pinned) Color.Transparent else surface)) {
+        if (tablet && !drag.tab.pinned) TabletOverviewCard(drag.tab,title(drag.tab),drag.preview.value,aspect,surface,ink,Modifier)
+        else {
+            CardHeader(drag.tab, ink)
+            if (!drag.tab.pinned) Box(Modifier.fillMaxSize().padding(2.dp)) { PageFace(drag.tab, drag.preview.value, surface, ink) }
+        }
     }
 }
 
 @Composable
 internal fun TabOverview(a: MainActivity) {
+    val tablet = LocalConfiguration.current.screenWidthDp >= 650
     var privateGroup by remember { mutableStateOf(a.page.secret) }
     var groupId by remember { mutableStateOf(a.preferredTab(false)?.groupId.orEmpty()) }
     val group = a.orderedTabs(privateGroup, groupId)
@@ -298,6 +329,11 @@ internal fun TabOverview(a: MainActivity) {
         }
     }
     val homeImage = remember { mutableStateOf<ImageBitmap?>(null) }
+    var windowFrame by remember { mutableStateOf<ImageBitmap?>(null) }
+    var frameOwner by remember { mutableStateOf<Page?>(null) }
+    var newTab by remember { mutableStateOf<Page?>(null) }
+    var pendingOpen by remember { mutableStateOf<Page?>(null) }
+    val newHomeImage = remember { mutableStateOf<ImageBitmap?>(null) }
     var waiting by remember { mutableStateOf(true) }
     var flight by remember { mutableStateOf<OverviewFlight?>(null) }
     val visible = remember { mutableStateMapOf<String, OverviewCard>() }
@@ -306,25 +342,56 @@ internal fun TabOverview(a: MainActivity) {
         if (flight?.openingPage == true || tab !in a.tabs) return
         waiting = false
         val card = visible[tab.id]
-        if (card == null) a.select(tab) else flight = OverviewFlight(card,true)
+        if (card == null) {
+            cancelSearch()
+            pendingOpen=tab
+        } else {
+            pendingOpen=null
+            flight=OverviewFlight(card,true)
+        }
+    }
+    fun addTab() {
+        if (waiting || flight != null || newTab != null) return
+        cancelSearch()
+        val previous=a.page
+        a.add(privateGroup,groupId=groupId,keepOverview=tablet)
+        if (tablet && a.page !== previous) {
+            newTab=a.page
+            pendingOpen=a.page
+        }
     }
     fun done() {
         val chosen = a.preferredTab(privateGroup, groupId)
-        if (chosen != null) open(chosen) else if (!privateGroup) a.add(false, groupId=groupId) else a.sheet = ""
+        if (chosen != null) open(chosen) else if (!privateGroup) addTab() else a.sheet = ""
     }
     LaunchedEffect(initial) {
-        if (initial.url.isBlank()) homeImage.value = captureStartPage(a)
+        if (tablet || initial.url.isBlank()) {
+            val image = captureBrowserFrame(a,tablet)
+            if (initial.url.isBlank()) homeImage.value = image
+            if (tablet) { windowFrame = image; frameOwner = initial }
+        }
         val card = snapshotFlow { visible[initial.id] }.first { it != null } ?: return@LaunchedEffect
         if (waiting) { waiting = false; flight = OverviewFlight(card,false) }
     }
-    LaunchedEffect(flight) {
+    LaunchedEffect(flight,tablet) {
         val current = flight ?: return@LaunchedEffect
+        if (tablet) current.awaitSourceFrame()
         if (current.openingPage) {
             if (current.card.tab in a.tabs) a.prepareOverviewCard(current.card.tab, current.card.image.value)
-            motion.animateTo(0f,tween(300,easing=FastOutSlowInEasing))
-            a.sheet = ""
+            if (tablet && frameOwner !== current.card.tab) {
+                withFrameNanos { }
+                withFrameNanos { }
+                if (a.page === current.card.tab) {
+                    windowFrame = captureBrowserFrame(a,true)
+                    frameOwner = current.card.tab
+                }
+            }
+            motion.animateTo(0f,if (tablet) tween(388,easing=CubicBezierEasing(.19f,.04f,.16f,1f))
+                else tween(300,easing=FastOutSlowInEasing))
+            a.sheet = if (tablet && newTab === current.card.tab && a.page === newTab) "地址" else ""
         } else {
-            motion.animateTo(1f,tween(330,easing=FastOutSlowInEasing))
+            motion.animateTo(1f,if (tablet) tween(365,easing=CubicBezierEasing(.22f,.02f,.15f,1f))
+                else tween(330,easing=FastOutSlowInEasing))
             flight = null
         }
     }
@@ -364,20 +431,79 @@ internal fun TabOverview(a: MainActivity) {
             val insetTop = WindowInsets.safeDrawing.getTop(LocalDensity.current)
             val insetBottom = WindowInsets.safeDrawing.getBottom(LocalDensity.current)
             val full = Rect(0f,insetTop.toFloat(),size.maxWidth.toFloat(),(size.maxHeight-insetBottom).toFloat())
+            val aspect = (maxWidth / (maxHeight-132.dp).coerceAtLeast(1.dp)).coerceIn(.68f,1.85f)
             Box(Modifier.fillMaxSize().graphicsLayer {
-                alpha = if (flight?.openingPage == true && flight?.card?.tab !== initial) 1f else motion.value
+                alpha = if (tablet) { if (waiting) 0f else 1f }
+                    else if (flight?.openingPage == true && flight?.card?.tab !== initial) 1f else motion.value
             }) {
                 LiquidKitRoot(backgroundColor=ground,dark=dark,edgeToEdgeSystemBars=false) {
                     val scene = rememberLiquidKitBackdrop()
                     val menuScene = rememberLiquidKitBackdrop()
                     val sampleOverview = picking || a.moveTarget != null || menu != null
                     val menuCapture = if (sampleOverview) Modifier.liquidKitBackdrop(menuScene) else Modifier
-                    CompositionLocalProvider(LocalLiquidKitBackdrop provides scene) {
-                        Column(Modifier.fillMaxSize().then(menuCapture).background(ground).safeDrawingPadding().imePadding().padding(horizontal=14.dp)) {
+                    val toolbarBackdrop = if (tablet) rememberLiquidKitBackdrop() else scene
+                    val background = remember(dark,tablet) {
+                        if (!tablet) SolidColor(ground) else Brush.linearGradient(if (dark)
+                            listOf(Color(0xff302c2e),Color(0xff25252a),Color(0xff363337))
+                        else listOf(Color(0xffded8d3),Color(0xffeae6e3),Color(0xffd8d7da),Color(0xffe9e6e8)))
+                    }
+                    if (tablet) Box(Modifier.fillMaxSize().liquidKitBackdrop(toolbarBackdrop).background(background))
+                    CompositionLocalProvider(LocalLiquidKitBackdrop provides toolbarBackdrop) {
+                        val addGesture = if (privateGroup || a.recentlyClosed.isEmpty()) Modifier.clickable(role=Role.Button,onClick=::addTab)
+                            else tabMenuGesture(Role.Button,::addTab) { x,y ->
+                                val actions = a.recentlyClosed.map { entry ->
+                                    val title = entry.site.name.ifBlank { entry.site.url }
+                                    val origin = BrowserLibrary.closedTabs.originHint(entry)
+                                    MenuAction(origin?.let { "$title · $it" } ?: title) { a.reopenInGroup(entry,groupId) }
+                                }
+                                menu = ContextMenu(x,y,null,null,actions) { a.sheet=="标签页" && !privateGroup }
+                            }
+                        val doneGesture = tabMenuGesture(Role.Button,::done) { x,y ->
+                            val closable = shown.filterNot { it.pinned }
+                            if (closable.isNotEmpty()) {
+                                val label = if (text.isEmpty()) "关闭组内 ${closable.size} 个标签页" else "关闭 ${closable.size} 个匹配标签页"
+                                menu = ContextMenu(x,y,null,null,listOf(MenuAction(label) {
+                                    a.confirm("关闭标签页",label+"？","关闭",destructive=true) {
+                                        a.closeOverviewTabs(closable,privateGroup,groupId)
+                                        cancelSearch()
+                                    }
+                                })) { a.sheet=="标签页" }
+                            }
+                        }
+                        val options = overviewOptions { x,y ->
+                            val actions = buildList {
+                                if (group.count { !it.pinned } > 1) TabArrangement.entries.forEach { order ->
+                                    add(MenuAction(order.label) { a.arrangeTabs(privateGroup,groupId,order) })
+                                }
+                                if (tablet && !privateGroup && a.recentlyClosed.isNotEmpty())
+                                    add(MenuAction("最近关闭") { a.sheet="最近关闭" })
+                                if (tablet) add(MenuAction(if (privateGroup) "新建无痕标签页" else "新建标签页") { addTab() })
+                            }
+                            if (actions.isNotEmpty()) menu=ContextMenu(x,y,null,null,actions) { a.sheet=="标签页" }
+                        }
+                        val controlsLayer = if (tablet) Modifier.graphicsLayer {
+                            val p = motion.value.coerceIn(0f,1f)
+                            alpha = (.18f + .82f*p)
+                            scaleX = .94f+.06f*p
+                            scaleY = scaleX
+                            val blur = 7.dp.toPx()*(1f-p)
+                            renderEffect = if (android.os.Build.VERSION.SDK_INT >= 31 && blur > .15f)
+                                BlurEffect(blur,blur,TileMode.Clamp) else null
+                        } else Modifier
+                        Column(Modifier.fillMaxSize().then(menuCapture).then(controlsLayer)
+                            .then(if (tablet) Modifier else Modifier.background(ground))
+                            .safeDrawingPadding().imePadding().padding(horizontal=if (tablet) 0.dp else 14.dp)) {
                             Crossfade(searching,animationSpec=tween(150),label="标签搜索") { editing ->
                                 if (editing) {
                                     OverviewSearchField(query, { query=it }, ink, surface, onCancel=::cancelSearch)
-                                } else Row(Modifier.fillMaxWidth().height(54.dp),verticalAlignment=Alignment.CenterVertically) {
+                                } else if (tablet) TabletOverviewToolbar(privateGroup,a.tabGroups[groupId].orEmpty(),
+                                    a.orderedTabs(false,groupId).size,!waiting && flight==null,ink,
+                                    chooseGroup={ secret ->
+                                        cancelSearch()
+                                        if (!secret && !privateGroup) picking=true else privateGroup=secret
+                                    },showGroups={ if (!waiting && flight==null) picking=true },options=options,
+                                    add=addGesture,search={ searching=true },done=doneGesture)
+                                else Row(Modifier.fillMaxWidth().height(54.dp),verticalAlignment=Alignment.CenterVertically) {
                                     Box(Modifier.weight(1f)) {
                                         OverviewHeading(if (privateGroup) "无痕标签页" else a.tabGroups[groupId] ?: "标签页",ink) { reveal }
                                     }
@@ -385,11 +511,8 @@ internal fun TabOverview(a: MainActivity) {
                                         .semantics { contentDescription="搜索标签页" }, contentAlignment=Alignment.Center) {
                                         LiquidKitIcon(LiquidKitSymbol.Search,ink)
                                     }
-                                    if (group.count { !it.pinned } > 1) ArrangeTabsButton(ink) { x, y ->
-                                        val actions = TabArrangement.entries.map { order ->
-                                            MenuAction(order.label) { a.arrangeTabs(privateGroup, groupId, order) }
-                                        }
-                                        menu = ContextMenu(x, y, null, null, actions) { a.sheet == "标签页" }
+                                    if (group.count { !it.pinned } > 1) Box(Modifier.size(48.dp).then(options),contentAlignment=Alignment.Center) {
+                                        LiquidKitIcon(LiquidKitSymbol.ChevronUpDown,ink)
                                     }
                                     if (!privateGroup) Box(Modifier.size(48.dp).clickable(role=Role.Button) { picking=true }
                                         .semantics { contentDescription="标签组" }, contentAlignment=Alignment.Center) {
@@ -403,24 +526,41 @@ internal fun TabOverview(a: MainActivity) {
                                     }
                                 }
                             }
-                            Box(Modifier.weight(1f).fillMaxWidth()) {
+                            Box(Modifier.weight(1f).fillMaxWidth().padding(horizontal=if (tablet) 18.dp else 0.dp)) {
                                 key(privateGroup,groupId) {
                                     val browseState = rememberLazyGridState(initialFirstVisibleItemIndex=group.indexOf(a.preferredTab(privateGroup, groupId)).coerceAtLeast(0))
                                     val searchState = rememberLazyGridState()
                                     val state = if (text.isEmpty()) browseState else searchState
                                     LaunchedEffect(text) { if (text.isNotEmpty()) searchState.scrollToItem(0) }
+                                    LaunchedEffect(pendingOpen) {
+                                        val target=pendingOpen ?: return@LaunchedEffect
+                                        val index=a.orderedTabs(privateGroup,groupId).indexOf(target)
+                                        if (index < 0) return@LaunchedEffect
+                                        if (browseState.layoutInfo.visibleItemsInfo.none { it.key==target.id })
+                                            browseState.animateScrollToItem(index)
+                                        snapshotFlow { visible[target.id] }.first { it != null }
+                                        if (target === newTab && a.page===target) {
+                                            withFrameNanos { }
+                                            val image=captureBrowserFrame(a,true)
+                                            windowFrame=image
+                                            frameOwner=target
+                                            newHomeImage.value=image
+                                        }
+                                        if (pendingOpen===target) open(target)
+                                    }
                                     val scope = rememberCoroutineScope()
                                     val reorder = remember(state, touches) { GridTabReorder(state, touches, a, scope) }
                                     DisposableEffect(reorder) { onDispose { reorder.cancel() } }
                                     val drag = reorder.lifted
                                     val displayed = if (drag != null && drag.landing == null && drag.members == group) drag.order() else shown
                                     androidx.activity.compose.BackHandler(enabled = drag != null) { reorder.cancel() }
-                                    Box(Modifier.fillMaxSize().liquidKitBackdrop(scene).background(ground)) {
-                                        LazyVerticalGrid(columns=GridCells.Adaptive(146.dp),state=state,modifier=Modifier.fillMaxSize().onGloballyPositioned { reorder.coordinates = it }
+                                    Box(Modifier.fillMaxSize().liquidKitBackdrop(scene).then(if (tablet) Modifier else Modifier.background(ground))) {
+                                        LazyVerticalGrid(columns=GridCells.Adaptive(if (tablet) 232.dp else 146.dp),state=state,modifier=Modifier.fillMaxSize().onGloballyPositioned { reorder.coordinates = it }
                                             .then(if (searching || flight!=null || waiting) Modifier else Modifier.revealTabSearch(browseState,
                                                 onProgress={ reveal=it }, onReveal={ searching=true })),
-                                            contentPadding=PaddingValues(top=8.dp,bottom=72.dp),horizontalArrangement=Arrangement.spacedBy(12.dp),
-                                            verticalArrangement=Arrangement.spacedBy(16.dp)) {
+                                            contentPadding=PaddingValues(top=if (tablet) 7.dp else 8.dp,bottom=if (tablet) 24.dp else 72.dp),
+                                            horizontalArrangement=Arrangement.spacedBy(if (tablet) 16.dp else 12.dp),
+                                            verticalArrangement=Arrangement.spacedBy(if (tablet) 8.dp else 16.dp)) {
                                             if (text.isNotEmpty() && shown.isEmpty()) {
                                                 item(span={ GridItemSpan(maxLineSpan) }) {
                                                     Box(Modifier.fillMaxWidth().height(112.dp),contentAlignment=Alignment.Center) {
@@ -429,7 +569,12 @@ internal fun TabOverview(a: MainActivity) {
                                                 }
                                             }
                                             items(displayed,key={it.id}, span = { tab -> GridItemSpan(if (tab.pinned) maxLineSpan else 1) }) { tab ->
-                                                val preview = if (tab === initial && tab.url.isBlank()) homeImage else overviewImage(a, tab, tab === initial)
+                                                val preview = if (tab === newTab) newHomeImage else if (tab === initial && tab.url.isBlank()) homeImage
+                                                    else overviewImage(a,tab,tab===initial)
+                                                val bounds = Modifier.onGloballyPositioned {
+                                                    visible[tab.id]=OverviewCard(tab,preview,Rect(it.positionInRoot(),it.size.toSize()))
+                                                }
+                                                val tabletCard = tablet && !tab.pinned
                                                 DisposableEffect(tab) { onDispose { visible.remove(tab.id) } }
                                                 val gestures = tabMenuGesture(Role.Button, { keyboard?.hide(); open(tab) }) { x, y ->
                                                     val actions = a.tabCardMenu(tab, x, y, { a.sheet == "标签页" && tab.secret == privateGroup && (privateGroup || tab.groupId == groupId) }) {
@@ -453,20 +598,25 @@ internal fun TabOverview(a: MainActivity) {
                                                         }
                                                     }
                                                 }
-                                                Column(Modifier.animateItem().fillMaxWidth().graphicsLayer { alpha = if (drag?.tab === tab) 0f else 1f }
+                                                val itemMotion=if (tabletCard) Modifier.animateItem(fadeOutSpec=tween(260))
+                                                    else Modifier.animateItem()
+                                                Column(itemMotion.fillMaxWidth().graphicsLayer { alpha = if (drag?.tab === tab) 0f else 1f }
                                                     .then(if (tab.pinned) Modifier.pointerInput(tab.id) {
                                                         detectHorizontalDragGestures { change, _ -> change.consume() }
-                                                    } else swipeToClose(tab) { a.close(tab) }).clip(RoundedCornerShape(17.dp)).background(surface)
-                                                    .border(if (tab===a.page) 2.dp else 1.dp,
-                                                        if(tab===a.page) Color(0xff478ff2) else ink.copy(alpha=.12f),RoundedCornerShape(17.dp))
+                                                    } else swipeToClose(tab) { a.close(tab) }).then(if (tabletCard) Modifier else Modifier.clip(RoundedCornerShape(17.dp)).background(surface)
+                                                        .border(if (tab===a.page) 2.dp else 1.dp,
+                                                            if(tab===a.page) Color(0xff478ff2) else ink.copy(alpha=.12f),RoundedCornerShape(17.dp)))
                                                     .then(gestures).then(accessibleOrder).then(if (tab.pinned) Modifier.semantics { contentDescription = "已固定，${title(tab)}" }
                                                         else Modifier)) {
-                                                    CardHeader(tab, ink, if (tab.pinned) Modifier.onGloballyPositioned {
-                                                        visible[tab.id] = OverviewCard(tab,preview,Rect(it.positionInRoot(),it.size.toSize()))
-                                                    } else Modifier) { a.close(tab) }
-                                                    if (!tab.pinned) Box(Modifier.fillMaxWidth().aspectRatio(1.05f).onGloballyPositioned {
-                                                        visible[tab.id] = OverviewCard(tab,preview,Rect(it.positionInRoot(),it.size.toSize()))
-                                                    }.padding(2.dp)) { PageFace(tab,preview.value,surface,ink) }
+                                                    if (tabletCard) {
+                                                        val moving=flight?.card?.tab === tab
+                                                        TabletOverviewCard(tab,title(tab),preview.value,aspect,surface,ink,bounds,
+                                                            flying=moving,captionAlpha=if (moving) motion.value else 1f) { a.close(tab) }
+                                                    } else {
+                                                        CardHeader(tab,ink,if (tab.pinned) bounds else Modifier) { a.close(tab) }
+                                                        if (!tab.pinned) Box(Modifier.fillMaxWidth().aspectRatio(1.05f).then(bounds)
+                                                            .padding(2.dp)) { PageFace(tab,preview.value,surface,ink) }
+                                                    }
                                                     if (text.isNotEmpty() && tab.url.isNotBlank()) {
                                                         Box(Modifier.fillMaxWidth().padding(horizontal=12.dp, vertical=5.dp)) {
                                                             OverviewText(Uri.decode(tab.url),ink.copy(alpha=.7f),12)
@@ -475,21 +625,11 @@ internal fun TabOverview(a: MainActivity) {
                                                 }
                                             }
                                         }
-                                        if (drag != null) DraggedTab(reorder, drag, surface, ink)
+                                        if (drag != null) DraggedTab(reorder,drag,surface,ink,tablet,aspect)
                                     }
                                 }
-                                Row(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(64.dp),verticalAlignment=Alignment.CenterVertically,
+                                if (!tablet) Row(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(64.dp),verticalAlignment=Alignment.CenterVertically,
                                     horizontalArrangement=Arrangement.SpaceBetween) {
-                                    val addTab = { a.add(privateGroup, groupId=groupId) }
-                                    val addGesture = if (privateGroup || a.recentlyClosed.isEmpty()) Modifier.clickable(role=Role.Button,onClick=addTab)
-                                        else tabMenuGesture(Role.Button,addTab) { x,y ->
-                                            val actions = a.recentlyClosed.map { entry ->
-                                                val title = entry.site.name.ifBlank { entry.site.url }
-                                                val origin = BrowserLibrary.closedTabs.originHint(entry)
-                                                MenuAction(origin?.let { "$title · $it" } ?: title) { a.reopenInGroup(entry,groupId) }
-                                            }
-                                            menu = ContextMenu(x,y,null,null,actions) { a.sheet=="标签页" && !privateGroup }
-                                        }
                                     LiquidKitGlassSurface(Modifier.size(46.dp).then(addGesture)) {
                                         Box(Modifier.fillMaxSize().semantics { contentDescription=if(privateGroup) "新建无痕标签页" else "新建标签页" },
                                             contentAlignment=Alignment.Center) { LiquidKitIcon(LiquidKitSymbol.Add,ink) }
@@ -510,18 +650,7 @@ internal fun TabOverview(a: MainActivity) {
                                             }
                                         }
                                     }
-                                    LiquidKitGlassSurface(Modifier.then(tabMenuGesture(Role.Button,::done) { x,y ->
-                                        val closable = shown.filterNot { it.pinned }
-                                        if (closable.isNotEmpty()) {
-                                            val label = if (text.isEmpty()) "关闭组内 ${closable.size} 个标签页" else "关闭 ${closable.size} 个匹配标签页"
-                                            menu = ContextMenu(x,y,null,null,listOf(MenuAction(label) {
-                                                a.confirm("关闭标签页",label+"？","关闭",destructive=true) {
-                                                    a.closeOverviewTabs(closable,privateGroup,groupId)
-                                                    cancelSearch()
-                                                }
-                                            })) { a.sheet=="标签页" }
-                                        }
-                                    })) {
+                                    LiquidKitGlassSurface(Modifier.then(doneGesture)) {
                                         Box(Modifier.height(46.dp).padding(horizontal=14.dp),contentAlignment=Alignment.Center) { OverviewText("完成",ink,15,true) }
                                     }
                                 }
@@ -541,13 +670,49 @@ internal fun TabOverview(a: MainActivity) {
                 }
             }
             flight?.let { current ->
-                val progress = motion.value
-                val rect = lerp(full,current.card.rect,progress)
                 val density = LocalDensity.current
-                Box(Modifier.offset { IntOffset(rect.left.roundToInt(),rect.top.roundToInt()) }
-                    .requiredSize(with(density){ rect.width.toDp() },with(density){ rect.height.toDp() })
-                    .clip(RoundedCornerShape((16*progress).dp))) {
+                val view = LocalView.current
+                val card=current.card.rect
+                val floating = if (tablet) Modifier.requiredSize(with(density){ card.width.toDp() },
+                    with(density){ card.height.toDp() }).graphicsLayer {
+                    val p=motion.value.coerceIn(0f,1f)
+                    val rect=lerp(full,card,p)
+                    transformOrigin=TransformOrigin(0f,0f)
+                    translationX=rect.left
+                    translationY=rect.top
+                    scaleX=rect.width/card.width.coerceAtLeast(1f)
+                    scaleY=rect.height/card.height.coerceAtLeast(1f)
+                    shape=RoundedCornerShape(15.dp*(p/scaleX))
+                    clip=true
+                }.drawWithContent {
+                    drawContent()
+                    current.presentedBy(view)
+                } else {
+                    val progress=motion.value
+                    val rect=lerp(full,card,progress)
+                    Modifier.offset { IntOffset(rect.left.roundToInt(),rect.top.roundToInt()) }
+                        .requiredSize(with(density){ rect.width.toDp() },with(density){ rect.height.toDp() })
+                        .clip(RoundedCornerShape((16*progress).dp))
+                }
+                Box(floating) {
                     PageFace(current.card.tab,current.card.image.value,surface,ink)
+                    if (tablet && frameOwner === current.card.tab) windowFrame?.let { frame ->
+                        Image(frame,null,Modifier.fillMaxSize().graphicsLayer {
+                            alpha=((.88f-motion.value)/.68f).coerceIn(0f,1f)
+                        },contentScale=ContentScale.FillBounds)
+                    }
+                    if (tablet && !current.card.tab.pinned) Box(Modifier.align(Alignment.TopEnd).padding(4.dp)
+                        .size(23.dp).graphicsLayer {
+                            val p=motion.value
+                            alpha=((p-.38f)/.62f).coerceIn(0f,1f)
+                            transformOrigin=TransformOrigin(1f,0f)
+                            scaleX=card.width/(full.width+(card.width-full.width)*p).coerceAtLeast(1f)
+                            scaleY=card.height/(full.height+(card.height-full.height)*p).coerceAtLeast(1f)
+                        }
+                        .background(Color.White.copy(alpha=.82f),androidx.compose.foundation.shape.CircleShape),
+                        contentAlignment=Alignment.Center) {
+                        LiquidKitIcon(LiquidKitSymbol.Close,Color(0xff333336),Modifier.size(13.dp))
+                    }
                 }
             }
         }
