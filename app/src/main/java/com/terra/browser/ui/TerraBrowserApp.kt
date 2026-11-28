@@ -164,16 +164,23 @@ private fun computeDragLiftGeometry(
     curY: Float,
     rootW: Float,
     rootH: Float,
+    swipeGapPx: Float,
     cardAspectRatio: Float,
 ): LiftCardGeometry {
     if (curY >= -1f) {
-        val horizP = (abs(curX) / rootW.coerceAtLeast(1f)).coerceIn(0f, 1f)
-        val scale = lerp(1f, 0.955f, (horizP * 2.5f).coerceIn(0f, 1f))
+        val swipeStep = (rootW + swipeGapPx).coerceAtLeast(1f)
+        val slideFrac = (curX / swipeStep).coerceIn(-1.25f, 1.25f)
+        val horizP = abs(slideFrac).coerceIn(0f, 1f)
+        // Symmetric bell curve: 0 at rest (0.0), peaks at mid-swipe (0.5), returns to 0 on dock (1.0)
+        val sep = sin(horizP * PI).toFloat().coerceIn(0f, 1f)
+        val smoothSep = Math.pow(sep.toDouble(), 0.72).toFloat().coerceIn(0f, 1f)
+        val scale = lerp(1f, 0.94f, smoothSep)
         val curW = (rootW * scale).coerceAtLeast(1f)
         val curH = (rootH * scale).coerceAtLeast(1f)
-        val left = (rootW - curW) * 0.5f + curX
+        val adjStep = curW + swipeGapPx
+        val left = (rootW - curW) * 0.5f + slideFrac * adjStep
         val top = (rootH - curH) * 0.5f
-        val cornerDp = lerp(0f, 34f, (horizP * 5f).coerceIn(0f, 1f))
+        val cornerDp = lerp(0f, 34f, smoothSep)
         return LiftCardGeometry(
             rect = Rect(left, top, left + curW, top + curH),
             cornerDp = cornerDp,
@@ -1057,7 +1064,7 @@ fun TerraBrowserApp(
                     val curY = if (isBarDragging) liveDragY else settleDragY.value
                     val pOverview = overviewProgress.value.coerceIn(0f, 1f)
                     val dragGeo = if (activeGesture) {
-                        computeDragLiftGeometry(curX, curY, rootWidthPx, rootHeightPx, overviewCardAspectRatio)
+                        computeDragLiftGeometry(curX, curY, rootWidthPx, rootHeightPx, swipeGapPx, overviewCardAspectRatio)
                     } else {
                         null
                     }
@@ -1149,6 +1156,9 @@ fun TerraBrowserApp(
                                             layoutProfile = layoutProfile,
                                             topSafeOffsetPx = adjSafeOffPx,
                                             snapMeta = adjSnapMeta,
+                                            rootWidthPx = rootWidthPx,
+                                            rootHeightPx = rootHeightPx,
+                                            statusBarTopPx = statusBarTopPx,
                                         )
                                     }
                                 }
@@ -1344,7 +1354,7 @@ fun TerraBrowserApp(
             val swipeStepTargetPx = swipeStepPx
             val edgeBouncePx = with(density) { 68.dp.toPx() }
             val maxSwipeVel = rootWidthPx * 4.5f
-            val swipeCommitSpring = remember { LiquidKitSpring.swiftUI(0.28f, 0.90f) }
+            val swipeCommitSpring = remember { LiquidKitSpring.swiftUI(0.26f, 1.0f) }
             val swipeCancelSpring = remember { LiquidKitSpring.swiftUI(0.30f, 0.86f) }
             val handleBarDragStart: () -> Unit = {
                 barGestureJob?.cancel()
@@ -1399,7 +1409,7 @@ fun TerraBrowserApp(
                 barGestureJob = scope.launch {
                     when {
                         allowOverview && (liftP >= 0.18f || (vy <= -420f && abs(vy) > abs(vx) * 0.85f)) -> {
-                            val releaseGeo = computeDragLiftGeometry(endX, endY, rootWidthPx, rootHeightPx, overviewCardAspectRatio)
+                            val releaseGeo = computeDragLiftGeometry(endX, endY, rootWidthPx, rootHeightPx, swipeGapPx, overviewCardAspectRatio)
                             closingOverrideRect = null
                             morphTargetRectOverride = cardBoundsMap[activeTab.id] ?: computeExpectedOverviewCardRect(
                                 state = state,
@@ -1621,12 +1631,64 @@ private fun AdjacentTabCardPreview(
     peekTab: BrowserTab?,
     appDark: Boolean,
     colors: io.liquidkit.LiquidKitColors,
-    @Suppress("UNUSED_PARAMETER") topExtraPadding: androidx.compose.ui.unit.Dp,
-    @Suppress("UNUSED_PARAMETER") layoutProfile: BrowserLayoutProfile = BrowserLayoutProfile.PHONE_PORTRAIT,
+    topExtraPadding: androidx.compose.ui.unit.Dp,
+    layoutProfile: BrowserLayoutProfile = BrowserLayoutProfile.PHONE_PORTRAIT,
     topSafeOffsetPx: Float = 0f,
     snapMeta: TabSnapshotMeta? = null,
+    rootWidthPx: Float = 0f,
+    rootHeightPx: Float = 0f,
+    statusBarTopPx: Float = 0f,
 ) {
-    if (peekTab == null || peekTab.isStartPage) {
+    if (peekTab != null && peekTab.isStartPage && rootWidthPx > 1f && rootHeightPx > 1f) {
+        val isPrivate = state.activeGroup.isPrivate
+        val spTopBg = when {
+            isPrivate -> Color(0xFF1A1B1F)
+            appDark -> Color(0xFF141820)
+            else -> Color(0xFFF3F5FA)
+        }
+        BoxWithConstraints(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(spTopBg),
+        ) {
+            val density = LocalDensity.current
+            val targetW = with(density) { maxWidth.toPx() }.coerceAtLeast(1f)
+            val s = (targetW / rootWidthPx).coerceIn(0.05f, 1.2f)
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .layout { measurable, constraints ->
+                        val rw = rootWidthPx.roundToInt().coerceAtLeast(1)
+                        val rh = rootHeightPx.roundToInt().coerceAtLeast(1)
+                        val placeable = measurable.measure(
+                            androidx.compose.ui.unit.Constraints.fixed(rw, rh),
+                        )
+                        layout(constraints.maxWidth, constraints.maxHeight) {
+                            placeable.placeRelative(0, 0)
+                        }
+                    }
+                    .graphicsLayer {
+                        transformOrigin = TransformOrigin(0f, 0f)
+                        scaleX = s
+                        scaleY = s
+                        translationY = statusBarTopPx * s
+                    },
+            ) {
+                StartPage(
+                    state = state,
+                    onOpenUrl = {},
+                    onOpenUrlInNewTab = {},
+                    onOpenReadingList = {},
+                    onOpenPrivacyReport = {},
+                    onOpenSettings = {},
+                    topExtraPadding = topExtraPadding,
+                    layoutProfile = layoutProfile,
+                    isPreview = true,
+                    isPrivateOverride = isPrivate,
+                )
+            }
+        }
+    } else if (peekTab == null || peekTab.isStartPage) {
         val isPrivate = state.activeGroup.isPrivate
         val bg = when {
             isPrivate -> Color(0xFF141518)
