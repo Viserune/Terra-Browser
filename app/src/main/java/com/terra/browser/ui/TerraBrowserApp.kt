@@ -159,34 +159,41 @@ private data class LiftCardGeometry(
     val cornerDp: Float,
 )
 
+private fun computeEffectiveLiftP(
+    curX: Float,
+    curY: Float,
+    rootH: Float,
+    liftDeadzonePx: Float,
+): Float {
+    val adaptiveDeadzone = maxOf(liftDeadzonePx, abs(curX) * 0.45f)
+    val excessUp = (-curY - adaptiveDeadzone).coerceAtLeast(0f)
+    return (excessUp / (rootH * 0.48f).coerceAtLeast(1f)).coerceIn(0f, 1f)
+}
+
 private fun computeDragLiftGeometry(
     curX: Float,
     curY: Float,
     rootW: Float,
     rootH: Float,
     swipeGapPx: Float,
+    liftDeadzonePx: Float,
     cardAspectRatio: Float,
 ): LiftCardGeometry {
-    if (curY >= -1f) {
-        val swipeStep = (rootW + swipeGapPx).coerceAtLeast(1f)
-        val slideFrac = (curX / swipeStep).coerceIn(-1.25f, 1.25f)
-        val horizP = abs(slideFrac).coerceIn(0f, 1f)
-        // Symmetric bell curve: 0 at rest (0.0), peaks at mid-swipe (0.5), returns to 0 on dock (1.0)
-        val sep = sin(horizP * PI).toFloat().coerceIn(0f, 1f)
-        val smoothSep = Math.pow(sep.toDouble(), 0.72).toFloat().coerceIn(0f, 1f)
-        val scale = lerp(1f, 0.94f, smoothSep)
-        val curW = (rootW * scale).coerceAtLeast(1f)
-        val curH = (rootH * scale).coerceAtLeast(1f)
-        val adjStep = curW + swipeGapPx
-        val left = (rootW - curW) * 0.5f + slideFrac * adjStep
-        val top = (rootH - curH) * 0.5f
-        val cornerDp = lerp(0f, 34f, smoothSep)
+    val adaptiveDeadzone = maxOf(liftDeadzonePx, abs(curX) * 0.45f)
+    val excessUp = (-curY - adaptiveDeadzone).coerceAtLeast(0f)
+    val swipeStep = (rootW + swipeGapPx).coerceAtLeast(1f)
+    val horizP = (abs(curX) / swipeStep).coerceIn(0f, 1f)
+    val sep = sin(horizP * PI).toFloat().coerceIn(0f, 1f)
+    val horizCornerDp = lerp(0f, 36f, Math.pow(sep.toDouble(), 0.65).toFloat().coerceIn(0f, 1f))
+
+    if (excessUp <= 0.5f) {
         return LiftCardGeometry(
-            rect = Rect(left, top, left + curW, top + curH),
-            cornerDp = cornerDp,
+            rect = Rect(curX, 0f, curX + rootW, rootH),
+            cornerDp = horizCornerDp,
         )
     }
-    val rawLift = (-curY / (rootH * 0.50f).coerceAtLeast(1f)).coerceAtLeast(0f)
+
+    val rawLift = (excessUp / (rootH * 0.48f).coerceAtLeast(1f)).coerceAtLeast(0f)
     val clampedLift = rawLift.coerceIn(0f, 1f)
     val widthScale = lerp(1f, 0.50f, clampedLift)
     val curW = (rootW * widthScale).coerceAtLeast(1f)
@@ -195,14 +202,15 @@ private fun computeDragLiftGeometry(
     val cropT = 1f - (1f - clampedLift) * (1f - clampedLift)
     val curH = lerp(fullScaledH, cardRatioH, cropT)
     val extraUp = if (rawLift > 1f) rubberBand(rawLift - 1f, 0.14f) * rootH * 0.22f else 0f
-    val bottomY = (rootH + curY * 0.85f - extraUp).coerceAtLeast(curH + rootH * 0.12f)
+    val bottomY = (rootH - excessUp * 0.85f - extraUp).coerceAtLeast(curH + rootH * 0.12f)
     val topY = bottomY - curH
     val centerX = rootW * 0.5f + curX * lerp(1f, 0.78f, clampedLift)
-    val cornerDp = if (clampedLift < 0.06f) {
+    val liftCornerDp = if (clampedLift < 0.06f) {
         lerp(0f, 32f, clampedLift / 0.06f)
     } else {
         lerp(32f, 22f, ((clampedLift - 0.06f) / 0.94f).coerceIn(0f, 1f))
     }
+    val cornerDp = maxOf(horizCornerDp * (1f - clampedLift), liftCornerDp)
     return LiftCardGeometry(
         rect = Rect(
             left = centerX - curW * 0.5f,
@@ -547,7 +555,8 @@ fun TerraBrowserApp(
                     lastCutoutEndPx = cutoutEndPx
                     lastLayoutProfile = layoutProfile
 
-            val swipeGapPx = with(density) { 16.dp.toPx() }
+            val swipeGapPx = with(density) { 24.dp.toPx() }
+            val liftDeadzonePx = with(density) { 20.dp.toPx() }
             val swipeStepPx = rootWidthPx + swipeGapPx
             val activeGesture by remember { derivedStateOf { isBarDragging || isSettlingBarDrag } }
             val canSwipeToNewTab = state.peekAdjacentTab(+1) == null && !activeTab.isStartPage
@@ -558,8 +567,13 @@ fun TerraBrowserApp(
                 overviewWarmed = true
             }
             val effectiveOverviewPProvider: () -> Float = {
+                val dragX = if (isBarDragging) liveDragX else settleDragX.value
                 val dragY = if (isBarDragging) liveDragY else settleDragY.value
-                val liftP = if (isBarDragging || isSettlingBarDrag) (-dragY / (rootHeightPx * 0.50f)).coerceIn(0f, 1f) else 0f
+                val liftP = if (isBarDragging || isSettlingBarDrag) {
+                    computeEffectiveLiftP(dragX, dragY, rootHeightPx, liftDeadzonePx)
+                } else {
+                    0f
+                }
                 val dragPreview = if (liftP > 0.03f) ((liftP - 0.03f) / 0.62f).coerceIn(0f, 0.82f) else 0f
                 maxOf(overviewProgress.value.coerceIn(0f, 1f), dragPreview)
             }
@@ -1064,13 +1078,13 @@ fun TerraBrowserApp(
                     val curY = if (isBarDragging) liveDragY else settleDragY.value
                     val pOverview = overviewProgress.value.coerceIn(0f, 1f)
                     val dragGeo = if (activeGesture) {
-                        computeDragLiftGeometry(curX, curY, rootWidthPx, rootHeightPx, swipeGapPx, overviewCardAspectRatio)
+                        computeDragLiftGeometry(curX, curY, rootWidthPx, rootHeightPx, swipeGapPx, liftDeadzonePx, overviewCardAspectRatio)
                     } else {
                         null
                     }
 
                     if (activeGesture && dragGeo != null) {
-                        val liftP = (-curY / (rootHeightPx * 0.50f)).coerceIn(0f, 1f)
+                        val liftP = computeEffectiveLiftP(curX, curY, rootHeightPx, liftDeadzonePx)
                         val dragPreview = if (liftP > 0.03f) ((liftP - 0.03f) / 0.62f).coerceIn(0f, 0.82f) else 0f
                         val ambientAlpha = (1f - dragPreview).coerceIn(0f, 1f)
                         if (ambientAlpha > 0.01f) {
@@ -1189,7 +1203,7 @@ fun TerraBrowserApp(
                         dragGeo != null -> {
                             heroRect = dragGeo.rect
                             heroCornerDp = dragGeo.cornerDp
-                            flightProgress = (-curY / (rootHeightPx * 0.50f)).coerceIn(0f, 1f)
+                            flightProgress = computeEffectiveLiftP(curX, curY, rootHeightPx, liftDeadzonePx)
                         }
                         curReleaseStart != null -> {
                             val t = ((pOverview - releaseStartP) / (1f - releaseStartP).coerceAtLeast(0.01f)).coerceIn(0f, 1f)
@@ -1401,15 +1415,20 @@ fun TerraBrowserApp(
             val handleBarDragEnd: (Float, Float, Boolean) -> Unit = { vx, vy, allowOverview ->
                 val endX = liveDragX
                 val endY = liveDragY
-                val liftP = if (allowOverview) (-endY / (rootHeightPx * 0.50f)).coerceIn(0f, 1f) else 0f
+                val liftP = if (allowOverview) computeEffectiveLiftP(endX, endY, rootHeightPx, liftDeadzonePx) else 0f
                 val dragOverviewPreview = if (liftP > 0.03f) ((liftP - 0.03f) / 0.62f).coerceIn(0f, 0.82f) else 0f
                 val clampedVx = vx.coerceIn(-maxSwipeVel, maxSwipeVel)
 
                 barGestureJob?.cancel()
                 barGestureJob = scope.launch {
                     when {
-                        allowOverview && (liftP >= 0.18f || (vy <= -420f && abs(vy) > abs(vx) * 0.85f)) -> {
-                            val releaseGeo = computeDragLiftGeometry(endX, endY, rootWidthPx, rootHeightPx, swipeGapPx, overviewCardAspectRatio)
+                        allowOverview && (
+                            liftP >= 0.18f ||
+                                (vy <= -420f && abs(vy) > abs(vx) * 0.95f && -endY > liftDeadzonePx * 1.2f)
+                            ) -> {
+                            val releaseGeo = computeDragLiftGeometry(
+                                endX, endY, rootWidthPx, rootHeightPx, swipeGapPx, liftDeadzonePx, overviewCardAspectRatio,
+                            )
                             closingOverrideRect = null
                             morphTargetRectOverride = cardBoundsMap[activeTab.id] ?: computeExpectedOverviewCardRect(
                                 state = state,
@@ -1639,7 +1658,8 @@ private fun AdjacentTabCardPreview(
     rootHeightPx: Float = 0f,
     statusBarTopPx: Float = 0f,
 ) {
-    if (peekTab != null && peekTab.isStartPage && rootWidthPx > 1f && rootHeightPx > 1f) {
+    val renderStartPage = peekTab?.isStartPage == true || (peekTab == null && rootWidthPx > 1f && rootHeightPx > 1f)
+    if (renderStartPage && rootWidthPx > 1f && rootHeightPx > 1f) {
         val isPrivate = state.activeGroup.isPrivate
         val spTopBg = when {
             isPrivate -> Color(0xFF1A1B1F)

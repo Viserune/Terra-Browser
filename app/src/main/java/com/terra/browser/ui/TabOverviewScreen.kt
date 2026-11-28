@@ -673,9 +673,9 @@ fun TabOverviewScreen(
                     scaleX = s
                     scaleY = s
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                        val blurT = 1f - ((p - 0.10f) / 0.90f).coerceIn(0f, 1f)
+                        val blurT = 1f - ((p - 0.30f) / 0.70f).coerceIn(0f, 1f)
                         val blurPx = if (p < 0.992f && blurT > 0.01f) {
-                            (blurT * blurT) * with(density) { 32.dp.toPx() }
+                            Math.pow(blurT.toDouble(), 1.25).toFloat() * with(density) { 36.dp.toPx() }
                         } else {
                             0f
                         }

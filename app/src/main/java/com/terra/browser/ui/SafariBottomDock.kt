@@ -2295,8 +2295,18 @@ internal fun AddressPillSurface(
                                         change.consume()
                                         latestOnBarDragDelta(totalDx * 0.5f, 0f)
                                     } else {
-                                        change.consume()
-                                        latestOnBarDragDelta(delta.x, 0f)
+                                        val upgradeUpThresholdPx = maxOf(
+                                            with(density) { 24.dp.toPx() },
+                                            abs(totalDx) * 0.55f,
+                                        )
+                                        if (latestEnablePullUpProvider() && totalDy < -upgradeUpThresholdPx) {
+                                            mode = 2
+                                            change.consume()
+                                            latestOnBarDragDelta(delta.x, totalDy)
+                                        } else {
+                                            change.consume()
+                                            latestOnBarDragDelta(delta.x, 0f)
+                                        }
                                     }
                                 }
                                 2 -> {
