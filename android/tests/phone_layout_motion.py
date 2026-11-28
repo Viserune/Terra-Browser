@@ -48,7 +48,9 @@ def verify_layout_motion(device, url):
     old_scale = device.shell("settings", "get", "global", scale_key).decode().strip()
     try:
         device.choose("top")
-        device.shell("settings", "put", "global", scale_key, "3")
+        # Software-rendered emulators can deliver only a few frames per second.
+        # Stretch the movement so screenrecord sees the glass crossing the middle.
+        device.shell("settings", "put", "global", scale_key, "8")
         with TemporaryDirectory() as temporary:
             folder = device.folder or Path(temporary)
             for target, label in (("bottom", "底部"), ("top", "顶部")):
@@ -66,7 +68,7 @@ def verify_layout_motion(device, url):
                             "--bit-rate",
                             "9000000",
                             "--time-limit",
-                            "5",
+                            "8",
                             remote,
                         ]
                     )
