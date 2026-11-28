@@ -205,7 +205,7 @@ def verify(adb, shell, locate, shot, port, prefix, screens, video):
         data = adb("exec-out", "run-as", RECEIVER, "cat", "files/payload")
         path = folder / name
         path.write_bytes(data)
-        path.with_suffix(".receipt.json").write_text(json.dumps(receipt, ensure_ascii=False, indent=2), encoding="utf-8")
+        path.with_name(path.name + ".receipt.json").write_text(json.dumps(receipt, ensure_ascii=False, indent=2), encoding="utf-8")
         assert receipt["name"] == title + "." + name.rsplit(".", 1)[1] and receipt["mime"] == mime, receipt
         assert receipt["subject"] == title, receipt
         assert receipt["bytes"] == len(data) and receipt["clipMatches"] and receipt["readGrant"], receipt
