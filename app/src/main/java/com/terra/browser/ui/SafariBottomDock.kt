@@ -248,7 +248,7 @@ internal fun AnchoredGlassMenuOverlay(
                     val availW = (safeRightDp - safeLeftDp).coerceAtLeast(180.dp)
                     val availH = (safeBottomDp - safeTopDp).coerceAtLeast(140.dp)
                     val menuW = minOf(menuMetrics.width, availW)
-                    val menuH = minOf(menuMetrics.height(items) + 12.dp, availH)
+                    val menuH = menuMetrics.constrainedHeight(items, safeHeight = availH)
 
                     val fallbackAnchor = Rect(
                         left = with(density) { ((maxWidth - menuW) * 0.5f).toPx() },
@@ -321,6 +321,7 @@ internal fun AnchoredGlassMenuOverlay(
                             state = menuState,
                             items = items,
                             ink = ink,
+                            maxHeight = menuH,
                             modifier = Modifier.requiredSize(menuW, menuH),
                         )
                     }

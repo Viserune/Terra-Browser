@@ -1366,7 +1366,10 @@ fun TabOverviewScreen(
 
                         if (isLandscape && maxWidth >= previewW + menuW + gapDp + 24.dp) {
                             // Side-by-side placement in landscape so card & menu never overflow vertical viewport
-                            menuH = minOf(menuMetrics.height(cardContextMenuItems), (safeBottom - safeTop).coerceAtLeast(140.dp))
+                            menuH = menuMetrics.constrainedHeight(
+                                cardContextMenuItems,
+                                safeHeight = (safeBottom - safeTop).coerceAtLeast(140.dp),
+                            )
                             val isCardInRightHalf = (cardLeftOrig + previewW * 0.5f) > maxWidth * 0.5f
                             if (isCardInRightHalf) {
                                 cardDestLeft = cardLeftOrig.coerceInSafe(menuW + gapDp + 12.dp, maxWidth - previewW - 12.dp)
@@ -1381,7 +1384,7 @@ fun TabOverviewScreen(
                             val portraitMenuBottom = (safeBottom - 64.dp).coerceAtLeast(safeTop + 140.dp)
                             val availPortraitH = (portraitMenuBottom - safeTop).coerceAtLeast(140.dp)
                             val maxMenuH = (availPortraitH - cardH - gapDp).coerceAtLeast(minOf(160.dp, availPortraitH))
-                            menuH = minOf(menuMetrics.height(cardContextMenuItems), maxMenuH)
+                            menuH = menuMetrics.constrainedHeight(cardContextMenuItems, safeHeight = maxMenuH)
                             val openAbove = (cardTopOrig + cardH * 0.5f) > maxHeight * 0.54f
                             cardDestLeft = cardLeftOrig.coerceInSafe(12.dp, maxWidth - previewW - 12.dp)
                             if (openAbove) {
@@ -1430,6 +1433,7 @@ fun TabOverviewScreen(
                                 tab = target,
                                 thumbnail = state.thumbnails[target.id],
                                 favicon = state.favicons[target.id],
+                                favorites = state.favorites,
                                 isActive = false,
                                 isDragged = false,
                                 isPrivateGroup = currentGroup.isPrivate,
@@ -1460,6 +1464,7 @@ fun TabOverviewScreen(
                                 state = cardContextMenuState,
                                 items = cardContextMenuItems,
                                 ink = overviewColors.ink,
+                                maxHeight = menuH,
                                 modifier = Modifier.requiredSize(menuW, menuH),
                             )
                         }
