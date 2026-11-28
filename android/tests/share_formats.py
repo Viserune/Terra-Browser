@@ -134,13 +134,21 @@ def verify(adb, shell, locate, shot, port, prefix, screens, video):
     def save_pdf(folder):
         format_sheet("PDF")
         tap("保存到文件")
-        def document_node(test):
+        roots = {"Downloads", "下载内容", "下载"}
+        def tree():
+            shell("uiautomator", "dump", "/sdcard/terra-motion.xml")
+            return ElementTree.fromstring(adb("exec-out", "cat", "/sdcard/terra-motion.xml"))
+        def document_node(test, within=None):
             until = time.monotonic() + 20
             labels = []
             while time.monotonic() < until:
-                shell("uiautomator", "dump", "/sdcard/terra-motion.xml")
+                hierarchy = tree()
                 labels = []
-                for node in ElementTree.fromstring(adb("exec-out", "cat", "/sdcard/terra-motion.xml")).iter("node"):
+                if within:
+                    hierarchy = next((n for n in hierarchy.iter("node") if n.get("resource-id","").endswith("/"+within)), None)
+                    if hierarchy is None:
+                        continue
+                for node in hierarchy.iter("node"):
                     if "documentsui" not in node.get("package", ""):
                         continue
                     label = node.get("text") or node.get("content-desc")
@@ -151,11 +159,15 @@ def verify(adb, shell, locate, shot, port, prefix, screens, video):
                         if r > x and b > y:
                             return (x+r)//2, (y+b)//2
             raise AssertionError(("Missing system file picker control", labels[:24]))
-        def choose(test):
-            shell("input", "tap", *document_node(test))
-        choose(lambda n: n.get("content-desc") in ("Show roots", "显示根目录", "显示根文件夹"))
-        choose(lambda n: n.get("text") in ("Downloads", "下载内容", "下载") and not n.get("resource-id","").endswith("breadcrumb_text"))
-        document_node(lambda n: n.get("class") == "android.widget.EditText" and title in n.get("text", ""))
+        def choose(test, within=None):
+            shell("input", "tap", *document_node(test, within))
+        filename = lambda n: n.get("class") == "android.widget.EditText" and title in n.get("text", "")
+        document_node(filename)
+        crumbs = [n.get("text") for n in tree().iter("node") if n.get("resource-id","").endswith("/breadcrumb_text")]
+        if len(crumbs) != 1 or crumbs[0] not in roots:
+            choose(lambda n: n.get("content-desc") in ("Show roots", "显示根目录", "显示根文件夹"))
+            choose(lambda n: n.get("text") in roots, within="roots_list")
+            document_node(filename)
         shot("format-save-picker")
         choose(lambda n: n.get("resource-id", "").endswith("/button_create") or n.get("text") in ("SAVE", "Save", "保存"))
         remote = "/sdcard/Download/" + title + ".pdf"
