@@ -5,12 +5,17 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
+import android.graphics.Color as AndroidColor
+import android.graphics.Rect as AndroidRect
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.Parcel
+import android.view.PixelCopy
 import android.view.View
 import android.view.ViewGroup
+import android.view.Window
 import android.webkit.CookieManager
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
@@ -30,7 +35,23 @@ import java.io.ByteArrayInputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.roundToInt
+
+data class TabSnapshotMeta(
+    val capturedTopInsetPx: Float,
+    val topEdgeColorArgb: Int,
+    val bottomEdgeColorArgb: Int,
+    val fromPixelCopy: Boolean,
+)
+
+data class PixelCopyCaptureSpec(
+    val window: Window,
+    val activeTabId: String,
+    val cropTopPx: Int,
+    val cropBottomPx: Int,
+    val canPixelCopy: Boolean,
+)
 
 class TerraWebViewPool(
     private val context: Context,
@@ -52,6 +73,7 @@ class TerraWebViewPool(
     private val savedStateCache = HashMap<String, ByteArray>()
     private val lastSnapshotAtMs = HashMap<String, Long>()
     private val thumbnailUrls = HashMap<String, String>()
+    private val snapshotMetaMap = HashMap<String, TabSnapshotMeta>()
     private val pendingSnapshotRunnables = HashMap<String, Runnable>()
     private val mainHandler = Handler(Looper.getMainLooper())
     private val ioExecutor = Executors.newSingleThreadExecutor()
@@ -65,6 +87,11 @@ class TerraWebViewPool(
 
     @Volatile
     var isTransitionActive: Boolean = false
+
+    @Volatile
+    var pixelCopySpecProvider: (() -> PixelCopyCaptureSpec?)? = null
+
+    fun snapshotMeta(tabId: String): TabSnapshotMeta? = snapshotMetaMap[tabId]
 
     init {
         preloadCachedThumbnails()
@@ -644,10 +671,16 @@ class TerraWebViewPool(
         val entry = entries[tabId] ?: return
         val wv = entry.webView
         wv.rememberReadingPosition(wv.url ?: entry.loadedUrl)
+        val currentUrl = wv.url.orEmpty().ifBlank { entry.loadedUrl }
+        if (snapshotMetaMap[tabId]?.fromPixelCopy == true && thumbnailUrls[tabId] == currentUrl) {
+            return
+        }
         if (!wv.isAttachedToWindow || wv.visibility != View.VISIBLE || wv.width <= 0 || wv.height <= 0) {
             return
         }
-        captureSnapshotSync(tabId, force = true)
+        if (!capturePixelCopy(tabId, force = true)) {
+            captureSnapshotSync(tabId, force = true)
+        }
     }
 
     fun scheduleSnapshot(tabId: String, delayMs: Long = 650L) {
@@ -668,9 +701,157 @@ class TerraWebViewPool(
         return (System.currentTimeMillis() - lastAt) <= maxAgeMs
     }
 
-    fun ensureSnapshotForTransition(tabId: String) {
-        if (hasFreshSnapshot(tabId, maxAgeMs = 180L)) return
-        captureSnapshotSync(tabId, force = true)
+    private fun hasFreshPixelCopy(tabId: String, maxAgeMs: Long): Boolean {
+        return snapshotMetaMap[tabId]?.fromPixelCopy == true && hasFreshSnapshot(tabId, maxAgeMs)
+    }
+
+    fun ensureSnapshotForTransition(tabId: String, onReady: (() -> Unit)? = null) {
+        if (hasFreshPixelCopy(tabId, maxAgeMs = 180L)) {
+            onReady?.invoke()
+            return
+        }
+        if (onReady == null) {
+            if (!capturePixelCopy(tabId, force = true)) {
+                captureSnapshotSync(tabId, force = true)
+            }
+            return
+        }
+        val fired = AtomicBoolean(false)
+        val finish = {
+            if (fired.compareAndSet(false, true)) {
+                onReady()
+            }
+        }
+        val timeoutTask = Runnable { finish() }
+        mainHandler.postDelayed(timeoutTask, 45L)
+        val started = capturePixelCopy(tabId, force = true) {
+            mainHandler.removeCallbacks(timeoutTask)
+            finish()
+        }
+        if (!started) {
+            mainHandler.removeCallbacks(timeoutTask)
+            captureSnapshotSync(tabId, force = true)
+            finish()
+        }
+    }
+
+    private fun sampleEdgeRowColor(bitmap: Bitmap, topRow: Boolean): Int {
+        val w = bitmap.width
+        val h = bitmap.height
+        if (w <= 0 || h <= 0) return AndroidColor.WHITE
+        val y = if (topRow) 2.coerceAtMost(h - 1) else (h - 3).coerceAtLeast(0)
+        var sumR = 0
+        var sumG = 0
+        var sumB = 0
+        val samples = 12
+        for (i in 0 until samples) {
+            val x = ((w - 1) * (i + 0.5f) / samples.toFloat()).toInt().coerceIn(0, w - 1)
+            val px = bitmap.getPixel(x, y)
+            sumR += AndroidColor.red(px)
+            sumG += AndroidColor.green(px)
+            sumB += AndroidColor.blue(px)
+        }
+        return AndroidColor.rgb(sumR / samples, sumG / samples, sumB / samples)
+    }
+
+    private fun commitCapturedBitmap(
+        tabId: String,
+        currentUrl: String,
+        bitmap: Bitmap,
+        meta: TabSnapshotMeta,
+    ): ImageBitmap {
+        val img = bitmap.asImageBitmap()
+        if (state.tabs.any { it.id == tabId }) {
+            state.thumbnails[tabId] = img
+            thumbnailUrls[tabId] = currentUrl
+            lastSnapshotAtMs[tabId] = System.currentTimeMillis()
+            snapshotMetaMap[tabId] = meta
+        }
+        runIo {
+            runCatching {
+                val tmp = File(thumbsDir, "$tabId.tmp")
+                FileOutputStream(tmp).use { out ->
+                    bitmap.compress(Bitmap.CompressFormat.JPEG, 85, out)
+                }
+                tmp.renameTo(File(thumbsDir, "$tabId.jpg"))
+            }
+        }
+        return img
+    }
+
+    fun capturePixelCopy(tabId: String, force: Boolean = false, onComplete: (() -> Unit)? = null): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return false
+        val spec = pixelCopySpecProvider?.invoke() ?: return false
+        if (!spec.canPixelCopy || spec.activeTabId != tabId) return false
+        val entry = entries[tabId] ?: return false
+        val wv = entry.webView
+        if (!wv.isAttachedToWindow || wv.visibility != View.VISIBLE || wv.width <= 0 || wv.height <= 0) {
+            return false
+        }
+
+        val loc = IntArray(2)
+        wv.getLocationInWindow(loc)
+        val decor = spec.window.decorView
+        val winW = decor.width.coerceAtLeast(1)
+        val winH = decor.height.coerceAtLeast(1)
+        val wvLeft = loc[0].coerceIn(0, winW - 1)
+        val wvTop = loc[1].coerceIn(0, winH - 1)
+        val wvRight = (loc[0] + wv.width).coerceIn(wvLeft + 1, winW)
+        val wvBottom = (loc[1] + wv.height).coerceIn(wvTop + 1, winH)
+        val cropTop = maxOf(wvTop, spec.cropTopPx).coerceIn(0, winH - 2)
+        val cropBottom = minOf(wvBottom, spec.cropBottomPx).coerceIn(cropTop + 1, winH)
+        val srcW = (wvRight - wvLeft).coerceAtLeast(1)
+        val srcH = (cropBottom - cropTop).coerceAtLeast(1)
+        if (srcW < 64 || srcH < 64) return false
+
+        val scale = minOf(1f, 540f / srcW.toFloat(), 1280f / srcH.toFloat()).coerceIn(0.2f, 1f)
+        val bmpW = (srcW * scale).roundToInt().coerceAtLeast(1)
+        val bmpH = (srcH * scale).roundToInt().coerceAtLeast(1)
+        val destBmp = runCatching { Bitmap.createBitmap(bmpW, bmpH, Bitmap.Config.ARGB_8888) }.getOrNull()
+            ?: return false
+        val currentUrl = wv.url.orEmpty().ifBlank { entry.loadedUrl }
+        val srcRect = AndroidRect(wvLeft, cropTop, wvRight, cropBottom)
+
+        val requested = runCatching {
+            PixelCopy.request(
+                spec.window,
+                srcRect,
+                destBmp,
+                { result ->
+                    if (result == PixelCopy.SUCCESS) {
+                        if (!isBitmapUniformBlank(destBmp)) {
+                            val topColor = sampleEdgeRowColor(destBmp, topRow = true)
+                            val botColor = sampleEdgeRowColor(destBmp, topRow = false)
+                            commitCapturedBitmap(
+                                tabId = tabId,
+                                currentUrl = currentUrl,
+                                bitmap = destBmp,
+                                meta = TabSnapshotMeta(
+                                    capturedTopInsetPx = cropTop.toFloat(),
+                                    topEdgeColorArgb = topColor,
+                                    bottomEdgeColorArgb = botColor,
+                                    fromPixelCopy = true,
+                                ),
+                            )
+                        } else {
+                            destBmp.recycle()
+                        }
+                    } else {
+                        destBmp.recycle()
+                        if (force && !state.thumbnails.containsKey(tabId)) {
+                            captureSnapshotSync(tabId, force = true)
+                        }
+                    }
+                    onComplete?.invoke()
+                },
+                mainHandler,
+            )
+            true
+        }.getOrElse {
+            destBmp.recycle()
+            false
+        }
+        return requested
     }
 
     fun captureSnapshotSync(tabId: String, force: Boolean = true): ImageBitmap? {
@@ -704,22 +885,19 @@ class TerraWebViewPool(
             return if (sameUrlCached || force) state.thumbnails[tabId] else state.thumbnails[tabId]
         }
 
-        val img = bitmap.asImageBitmap()
-        if (state.tabs.any { it.id == tabId }) {
-            state.thumbnails[tabId] = img
-            thumbnailUrls[tabId] = currentUrl
-            lastSnapshotAtMs[tabId] = System.currentTimeMillis()
-        }
-        runIo {
-            runCatching {
-                val tmp = File(thumbsDir, "$tabId.tmp")
-                FileOutputStream(tmp).use { out ->
-                    bitmap.compress(Bitmap.CompressFormat.JPEG, 85, out)
-                }
-                tmp.renameTo(File(thumbsDir, "$tabId.jpg"))
-            }
-        }
-        return img
+        val topColor = sampleEdgeRowColor(bitmap, topRow = true)
+        val botColor = sampleEdgeRowColor(bitmap, topRow = false)
+        return commitCapturedBitmap(
+            tabId = tabId,
+            currentUrl = currentUrl,
+            bitmap = bitmap,
+            meta = TabSnapshotMeta(
+                capturedTopInsetPx = entry.webView.currentTopSafeOffsetPx,
+                topEdgeColorArgb = topColor,
+                bottomEdgeColorArgb = botColor,
+                fromPixelCopy = false,
+            ),
+        )
     }
 
     fun captureSnapshot(tabId: String, @Suppress("UNUSED_PARAMETER") targetWidth: Int = 540, force: Boolean = false): ImageBitmap? {
@@ -735,6 +913,12 @@ class TerraWebViewPool(
             if (now - lastAt < 3500L) {
                 return state.thumbnails[tabId]
             }
+        }
+        if (capturePixelCopy(tabId, force = force)) {
+            return state.thumbnails[tabId]
+        }
+        if (!force && snapshotMetaMap[tabId]?.fromPixelCopy == true && thumbnailUrls[tabId] == currentUrl) {
+            return state.thumbnails[tabId]
         }
         return captureSnapshotSync(tabId, force = force)
     }
@@ -951,6 +1135,7 @@ class TerraWebViewPool(
         pendingSnapshotRunnables.remove(tabId)?.let { mainHandler.removeCallbacks(it) }
         lastSnapshotAtMs.remove(tabId)
         thumbnailUrls.remove(tabId)
+        snapshotMetaMap.remove(tabId)
         val removed = entries.remove(tabId)
         if (removed != null) {
             (removed.webView.parent as? ViewGroup)?.removeView(removed.webView)

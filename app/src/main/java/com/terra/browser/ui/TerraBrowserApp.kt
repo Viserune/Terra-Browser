@@ -55,6 +55,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.derivedStateOf
@@ -118,6 +119,8 @@ import com.terra.browser.model.SiteDarkMode
 import com.terra.browser.model.TabBarMode
 import com.terra.browser.reader.SafariReaderOverlay
 import com.terra.browser.state.TerraBrowserState
+import com.terra.browser.webview.PixelCopyCaptureSpec
+import com.terra.browser.webview.TabSnapshotMeta
 import com.terra.browser.webview.TerraWebViewHost
 import com.terra.browser.webview.TerraWebViewPool
 import com.kyant.backdrop.drawBackdrop
@@ -579,6 +582,52 @@ fun TerraBrowserApp(
                         !hasBlockingModal
                 }
             }
+            val pixelCopyCropTopPx = if (layoutProfile == BrowserLayoutProfile.TABLET_LANDSCAPE ||
+                (layoutProfile != BrowserLayoutProfile.PHONE_LANDSCAPE && state.tabBarMode == TabBarMode.TOP && !state.isToolbarHidden)
+            ) {
+                topSafeInsetPx.roundToInt()
+            } else {
+                statusBarTopPx.roundToInt()
+            }
+            val pixelCopyBottomClearanceDp = BrowserSafeAreaCalculator.bottomSafeInsetDp(
+                layoutProfile = layoutProfile,
+                tabBarMode = state.tabBarMode,
+                isToolbarHidden = state.isToolbarHidden,
+                isToolbarMinimized = state.isToolbarMinimized,
+                navigationBarBottomDp = navBarBottomDp,
+            )
+            val pixelCopyCropBottomPx = (rootHeightPx - with(density) { pixelCopyBottomClearanceDp.dp.toPx() })
+                .roundToInt()
+                .coerceAtLeast(pixelCopyCropTopPx + 64)
+
+            SideEffect {
+                val win = hostActivity?.window
+                pool.pixelCopySpecProvider = if (win != null) {
+                    {
+                        PixelCopyCaptureSpec(
+                            window = win,
+                            activeTabId = activeTab.id,
+                            cropTopPx = pixelCopyCropTopPx,
+                            cropBottomPx = pixelCopyCropBottomPx,
+                            canPixelCopy = isLivePageLayerVisible &&
+                                !activeTab.isStartPage &&
+                                !hasBlockingModal &&
+                                state.activeReaderArticle == null &&
+                                state.activeContextHit == null &&
+                                !isPullRefreshing &&
+                                dragPullRefreshPx <= 1f &&
+                                !isTopDragging,
+                        )
+                    }
+                } else {
+                    null
+                }
+            }
+            DisposableEffect(Unit) {
+                onDispose {
+                    pool.pixelCopySpecProvider = null
+                }
+            }
 
             // 1. Tab Overview Layer (kept warm after startup; collapses to 0x0 when hidden)
             if (overviewWarmed || showOverviewLayer) {
@@ -815,6 +864,9 @@ fun TerraBrowserApp(
                             )
 
                             if (showVeil) {
+                                val veilMeta = pool.snapshotMeta(activeTab.id)
+                                val veilTopOffset = veilMeta?.takeIf { it.fromPixelCopy }?.capturedTopInsetPx
+                                    ?: if (isTopDragging) dragTopSafeOffsetPx else topSafeOffsetAnim.value
                                 Box(
                                     modifier = Modifier
                                         .fillMaxSize()
@@ -827,7 +879,8 @@ fun TerraBrowserApp(
                                         colors = colors,
                                         topExtraPadding = topBarExtra,
                                         layoutProfile = layoutProfile,
-                                        topSafeOffsetPx = if (isTopDragging) dragTopSafeOffsetPx else topSafeOffsetAnim.value,
+                                        topSafeOffsetPx = veilTopOffset,
+                                        snapMeta = veilMeta,
                                     )
                                 }
                             }
@@ -995,10 +1048,11 @@ fun TerraBrowserApp(
                             if (peekTab != null || showNewTabCard) {
                                 val adjAlpha = (1f - ((liftP - 0.14f) / 0.28f).coerceIn(0f, 1f))
                                 if (adjAlpha > 0.01f) {
-                                    val adjSafeOffPx = if (peekTab != null && !peekTab.isStartPage) {
-                                        pool.currentTopSafeOffsetPx(peekTab.id, topSafeInsetPx) * (1f - liftP) * adjScale
-                                    } else {
-                                        0f
+                                    val adjSnapMeta = peekTab?.let { pool.snapshotMeta(it.id) }
+                                    val adjSafeOffPx = when {
+                                        peekTab == null || peekTab.isStartPage -> 0f
+                                        adjSnapMeta?.fromPixelCopy == true -> adjSnapMeta.capturedTopInsetPx * (1f - liftP) * adjScale
+                                        else -> pool.currentTopSafeOffsetPx(peekTab.id, topSafeInsetPx) * (1f - liftP) * adjScale
                                     }
                                     Box(
                                         modifier = Modifier
@@ -1032,6 +1086,7 @@ fun TerraBrowserApp(
                                             topExtraPadding = topBarExtra,
                                             layoutProfile = layoutProfile,
                                             topSafeOffsetPx = adjSafeOffPx,
+                                            snapMeta = adjSnapMeta,
                                         )
                                     }
                                 }
@@ -1133,22 +1188,30 @@ fun TerraBrowserApp(
                             }
                         } else {
                             val thumb = state.thumbnails[activeTab.id]
+                            val snapMeta = pool.snapshotMeta(activeTab.id)
                             if (thumb != null) {
+                                val topFillColor = snapMeta?.topEdgeColorArgb?.let(::Color) ?: webBgColor
+                                val botFillColor = snapMeta?.bottomEdgeColorArgb?.let(::Color) ?: webBgColor
+                                val startTopInset = snapMeta?.capturedTopInsetPx ?: safeOffPx
                                 Box(
                                     modifier = Modifier
                                         .fillMaxSize()
-                                        .background(webBgColor),
+                                        .drawBehind {
+                                            val midY = size.height * 0.5f
+                                            drawRect(topFillColor, size = Size(size.width, midY))
+                                            drawRect(botFillColor, topLeft = Offset(0f, midY), size = Size(size.width, size.height - midY))
+                                        },
                                 ) {
                                     Image(
                                         bitmap = thumb,
                                         contentDescription = activeTab.title,
                                         alignment = Alignment.TopCenter,
-                                        contentScale = ContentScale.Crop,
+                                        contentScale = ContentScale.FillWidth,
                                         modifier = Modifier
                                             .fillMaxSize()
                                             .graphicsLayer {
                                                 val s = (cardW / rootWidthPx).coerceIn(0.05f, 1.2f)
-                                                translationY = lerp(safeOffPx, 0f, flightProgress) * s
+                                                translationY = lerp(startTopInset, 0f, flightProgress) * s
                                             },
                                     )
                                 }
@@ -1160,6 +1223,7 @@ fun TerraBrowserApp(
                                     colors = colors,
                                     topExtraPadding = topBarExtra,
                                     layoutProfile = layoutProfile,
+                                    snapMeta = snapMeta,
                                 )
                             }
                         }
@@ -1350,22 +1414,26 @@ fun TerraBrowserApp(
                 onBarDragDelta = handleBarDragDelta,
                 onBarDragEnd = handleBarDragEnd,
                 onOpenOverview = {
-                    if (!activeTab.isStartPage) {
-                        pool.ensureSnapshotForTransition(activeTab.id)
+                    val launchOverview = {
+                        releaseStartRect = null
+                        morphTargetRectOverride = cardBoundsMap[activeTab.id] ?: computeExpectedOverviewCardRect(
+                            state = state,
+                            tabId = activeTab.id,
+                            layoutProfile = layoutProfile,
+                            rootWidthPx = rootWidthPx,
+                            rootHeightPx = rootHeightPx,
+                            statusBarTopPx = statusBarTopPx,
+                            densityPx = density.density,
+                            cutoutStartPx = cutoutStartPx,
+                            cutoutEndPx = cutoutEndPx,
+                        )
+                        state.isOverviewOpen = true
                     }
-                    releaseStartRect = null
-                    morphTargetRectOverride = cardBoundsMap[activeTab.id] ?: computeExpectedOverviewCardRect(
-                        state = state,
-                        tabId = activeTab.id,
-                        layoutProfile = layoutProfile,
-                        rootWidthPx = rootWidthPx,
-                        rootHeightPx = rootHeightPx,
-                        statusBarTopPx = statusBarTopPx,
-                        densityPx = density.density,
-                        cutoutStartPx = cutoutStartPx,
-                        cutoutEndPx = cutoutEndPx,
-                    )
-                    state.isOverviewOpen = true
+                    if (!activeTab.isStartPage) {
+                        pool.ensureSnapshotForTransition(activeTab.id, onReady = launchOverview)
+                    } else {
+                        launchOverview()
+                    }
                 },
                 onOpenNewTab = {
                     state.createTab(groupId = state.activeGroup.id, url = "", select = true, insertAfterActive = true)
@@ -1442,6 +1510,7 @@ private fun AdjacentTabCardPreview(
     @Suppress("UNUSED_PARAMETER") topExtraPadding: androidx.compose.ui.unit.Dp,
     @Suppress("UNUSED_PARAMETER") layoutProfile: BrowserLayoutProfile = BrowserLayoutProfile.PHONE_PORTRAIT,
     topSafeOffsetPx: Float = 0f,
+    snapMeta: TabSnapshotMeta? = null,
 ) {
     if (peekTab == null || peekTab.isStartPage) {
         val isPrivate = state.activeGroup.isPrivate
@@ -1496,16 +1565,22 @@ private fun AdjacentTabCardPreview(
                 peekDark -> Color(0xFF141519)
                 else -> Color.White
             }
+            val topFillColor = snapMeta?.topEdgeColorArgb?.let(::Color) ?: peekBgColor
+            val botFillColor = snapMeta?.bottomEdgeColorArgb?.let(::Color) ?: peekBgColor
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(peekBgColor),
+                    .drawBehind {
+                        val midY = size.height * 0.5f
+                        drawRect(topFillColor, size = Size(size.width, midY))
+                        drawRect(botFillColor, topLeft = Offset(0f, midY), size = Size(size.width, size.height - midY))
+                    },
             ) {
                 Image(
                     bitmap = thumb,
                     contentDescription = peekTab.title,
                     alignment = Alignment.TopCenter,
-                    contentScale = ContentScale.Crop,
+                    contentScale = ContentScale.FillWidth,
                     modifier = Modifier
                         .fillMaxSize()
                         .graphicsLayer { translationY = topSafeOffsetPx },
