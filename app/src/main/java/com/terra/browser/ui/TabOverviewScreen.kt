@@ -3,6 +3,7 @@ package com.terra.browser.ui
 import android.os.SystemClock
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutLinearInEasing
 import androidx.compose.animation.core.animateFloatAsState
@@ -19,7 +20,9 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -127,11 +130,13 @@ import com.terra.browser.state.TerraBrowserState
 import com.terra.browser.webview.TerraWebViewPool
 import io.liquidkit.LiquidKitAnchoredMenuHost
 import io.liquidkit.LiquidKitBottomTabs
+import io.liquidkit.LiquidKitContextMenuHost
 import io.liquidkit.LiquidKitGlassSurface
 import io.liquidkit.LiquidKitHaptic
 import io.liquidkit.LiquidKitIconButton
 import io.liquidkit.LiquidKitMenuActivation
 import io.liquidkit.LiquidKitMenuItem
+import io.liquidkit.LiquidKitMenuPanel
 import io.liquidkit.LiquidKitMenuPresentation
 import io.liquidkit.LiquidKitSpring
 import io.liquidkit.LiquidKitSymbol
@@ -140,6 +145,7 @@ import io.liquidkit.LiquidKitTheme
 import io.liquidkit.liquidKitAppearance
 import io.liquidkit.liquidKitBackdrop
 import io.liquidkit.liquidKitColors
+import io.liquidkit.liquidKitMenuMetrics
 import io.liquidkit.liquidKitMenuSource
 import io.liquidkit.liquidKitMenuTrigger
 import io.liquidkit.liquidKitTypography
@@ -555,7 +561,13 @@ fun TabOverviewScreen(
         BoxWithConstraints(
             modifier = Modifier
                 .fillMaxSize()
-                .liquidKitBackdrop(overviewBackdrop, enabled = overviewBackdropEnabled)
+                .liquidKitBackdrop(
+                    backdrop = overviewBackdrop,
+                    enabled = latestOverviewProgress() > 0.05f,
+                    scale = 0.5f,
+                    frozen = !overviewBackdropEnabled,
+                    minRefreshIntervalMillis = 16L,
+                )
                 .drawBehind {
                     val groups = state.tabGroups
                     val lastIdx = groups.lastIndex.coerceAtLeast(0)
@@ -573,14 +585,32 @@ fun TabOverviewScreen(
                     drawRect(Brush.verticalGradient(listOf(topColor, midColor, botColor)))
                 },
         ) {
+            val isTablet = layoutProfile == BrowserLayoutProfile.TABLET_LANDSCAPE
+            val isPortraitTablet = isTablet && maxWidth < maxHeight
             val gridCols = when (layoutProfile) {
                 BrowserLayoutProfile.PHONE_PORTRAIT -> 2
                 BrowserLayoutProfile.PHONE_LANDSCAPE -> 3
-                BrowserLayoutProfile.TABLET_LANDSCAPE -> if (maxWidth >= 780.dp) 4 else 3
+                BrowserLayoutProfile.TABLET_LANDSCAPE -> when {
+                    isPortraitTablet -> 3
+                    maxWidth >= 960.dp -> 4
+                    else -> 3
+                }
             }
-            val cardAspectRatio = if (layoutProfile == BrowserLayoutProfile.PHONE_PORTRAIT) 0.68f else 1.16f
-            val gridTopPad = statusBarTopDp + if (layoutProfile == BrowserLayoutProfile.PHONE_LANDSCAPE) 54.dp else 64.dp
-            val gridBottomPad = if (layoutProfile == BrowserLayoutProfile.PHONE_LANDSCAPE) 88.dp else 128.dp
+            val cardAspectRatio = when (layoutProfile) {
+                BrowserLayoutProfile.PHONE_PORTRAIT -> 0.68f
+                BrowserLayoutProfile.TABLET_LANDSCAPE -> if (isPortraitTablet) 0.72f else 1.12f
+                BrowserLayoutProfile.PHONE_LANDSCAPE -> 1.16f
+            }
+            val gridTopPad = statusBarTopDp + when {
+                isTablet -> 72.dp
+                layoutProfile == BrowserLayoutProfile.PHONE_LANDSCAPE -> 54.dp
+                else -> 64.dp
+            }
+            val gridBottomPad = when {
+                isTablet && !state.isOverviewSearchActive && !isSelectionMode -> 36.dp
+                layoutProfile == BrowserLayoutProfile.PHONE_LANDSCAPE -> 88.dp
+                else -> 128.dp
+            }
 
             HorizontalPager(
                 state = pagerState,
@@ -1045,49 +1075,102 @@ fun TabOverviewScreen(
             modifier = Modifier.align(Alignment.TopCenter),
         )
 
-        // Top Floating Standard Liquid Glass Buttons (Search, Group Menu, More Menu)
-        if (!state.showSettingsSheet) {
-            LiquidKitTheme(opacity = liquidKitAppearance().opacity, dark = overviewDark) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .statusBarsPadding()
-                    .displayCutoutPadding()
-                    .padding(horizontal = 16.dp, vertical = if (layoutProfile == BrowserLayoutProfile.PHONE_LANDSCAPE) 6.dp else 10.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                    LiquidKitIconButton(
-                        onClick = { state.isOverviewSearchActive = !state.isOverviewSearchActive },
-                        backdrop = overviewBackdrop,
-                        size = 44.dp,
-                    ) {
-                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            TerraSymbolIcon(
-                                symbol = LiquidKitSymbol.Search,
-                                tint = if (state.isOverviewSearchActive) accentBlue else overviewColors.ink,
-                                modifier = Modifier.size(18.dp),
-                            )
+        // Top Floating Standard Liquid Glass Buttons / iPadOS Tablet Overview Toolbar
+        val isTabletOverview = layoutProfile == BrowserLayoutProfile.TABLET_LANDSCAPE
+        LiquidKitTheme(opacity = liquidKitAppearance().opacity, dark = overviewDark) {
+            if (isTabletOverview) {
+                TabletOverviewTopBar(
+                    groups = state.tabGroups,
+                    state = state,
+                    pagerState = pagerState,
+                    groupsMenuState = groupsMenuState,
+                    groupsMenuItems = groupsMenuItems,
+                    moreMenuState = moreMenuState,
+                    moreMenuItems = moreMenuItems,
+                    backdrop = overviewBackdrop,
+                    ink = overviewColors.ink,
+                    secondary = overviewColors.secondary,
+                    accentBlue = accentBlue,
+                    isSearchActive = state.isOverviewSearchActive,
+                    onToggleSearch = { state.isOverviewSearchActive = !state.isOverviewSearchActive },
+                    onAddTab = { onCreateNewTab(currentGroup.id) },
+                    onDone = onCloseOverview,
+                )
+            } else {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .statusBarsPadding()
+                        .displayCutoutPadding()
+                        .padding(horizontal = 16.dp, vertical = if (layoutProfile == BrowserLayoutProfile.PHONE_LANDSCAPE) 6.dp else 10.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                        LiquidKitIconButton(
+                            onClick = { state.isOverviewSearchActive = !state.isOverviewSearchActive },
+                            backdrop = overviewBackdrop,
+                            size = 44.dp,
+                        ) {
+                            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                TerraSymbolIcon(
+                                    symbol = LiquidKitSymbol.Search,
+                                    tint = if (state.isOverviewSearchActive) accentBlue else overviewColors.ink,
+                                    modifier = Modifier.size(18.dp),
+                                )
+                            }
+                        }
+
+                        LiquidKitAnchoredMenuHost(
+                            state = groupsMenuState,
+                            items = groupsMenuItems,
+                            backdrop = overviewBackdrop,
+                            presentation = LiquidKitMenuPresentation.ButtonTransform,
+                        ) {
+                            LiquidKitIconButton(
+                                onClick = { if (groupsMenuItems.isNotEmpty()) groupsMenuState.show() },
+                                backdrop = overviewBackdrop,
+                                size = 44.dp,
+                                modifier = Modifier
+                                    .liquidKitMenuSource(groupsMenuState, cornerRadius = 22.dp)
+                                    .then(
+                                        if (groupsMenuItems.isNotEmpty() || groupsMenuState.expanded) {
+                                            Modifier.liquidKitMenuTrigger(
+                                                state = groupsMenuState,
+                                                activation = LiquidKitMenuActivation.Press,
+                                            )
+                                        } else {
+                                            Modifier
+                                        },
+                                    ),
+                            ) {
+                                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                    TerraSymbolIcon(
+                                        symbol = LiquidKitSymbol.List,
+                                        tint = overviewColors.ink,
+                                        modifier = Modifier.size(18.dp),
+                                    )
+                                }
+                            }
                         }
                     }
 
                     LiquidKitAnchoredMenuHost(
-                        state = groupsMenuState,
-                        items = groupsMenuItems,
+                        state = moreMenuState,
+                        items = moreMenuItems,
                         backdrop = overviewBackdrop,
                         presentation = LiquidKitMenuPresentation.ButtonTransform,
                     ) {
                         LiquidKitIconButton(
-                            onClick = { if (groupsMenuItems.isNotEmpty()) groupsMenuState.show() },
+                            onClick = { if (moreMenuItems.isNotEmpty()) moreMenuState.show() },
                             backdrop = overviewBackdrop,
                             size = 44.dp,
                             modifier = Modifier
-                                .liquidKitMenuSource(groupsMenuState, cornerRadius = 22.dp)
+                                .liquidKitMenuSource(moreMenuState, cornerRadius = 22.dp)
                                 .then(
-                                    if (groupsMenuItems.isNotEmpty() || groupsMenuState.expanded) {
+                                    if (moreMenuItems.isNotEmpty() || moreMenuState.expanded) {
                                         Modifier.liquidKitMenuTrigger(
-                                            state = groupsMenuState,
+                                            state = moreMenuState,
                                             activation = LiquidKitMenuActivation.Press,
                                         )
                                     } else {
@@ -1097,66 +1180,34 @@ fun TabOverviewScreen(
                         ) {
                             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                                 TerraSymbolIcon(
-                                    symbol = LiquidKitSymbol.List,
+                                    symbol = LiquidKitSymbol.More,
                                     tint = overviewColors.ink,
-                                    modifier = Modifier.size(18.dp),
+                                    modifier = Modifier.size(19.dp),
                                 )
                             }
                         }
                     }
                 }
-
-                LiquidKitAnchoredMenuHost(
-                    state = moreMenuState,
-                    items = moreMenuItems,
-                    backdrop = overviewBackdrop,
-                    presentation = LiquidKitMenuPresentation.ButtonTransform,
-                ) {
-                    LiquidKitIconButton(
-                        onClick = { if (moreMenuItems.isNotEmpty()) moreMenuState.show() },
-                        backdrop = overviewBackdrop,
-                        size = 44.dp,
-                        modifier = Modifier
-                            .liquidKitMenuSource(moreMenuState, cornerRadius = 22.dp)
-                            .then(
-                                if (moreMenuItems.isNotEmpty() || moreMenuState.expanded) {
-                                    Modifier.liquidKitMenuTrigger(
-                                        state = moreMenuState,
-                                        activation = LiquidKitMenuActivation.Press,
-                                    )
-                                } else {
-                                    Modifier
-                                },
-                            ),
-                    ) {
-                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            TerraSymbolIcon(
-                                symbol = LiquidKitSymbol.More,
-                                tint = overviewColors.ink,
-                                modifier = Modifier.size(19.dp),
-                            )
-                        }
-                    }
-                }
-            }
             }
         }
 
         // Bottom Progressive Blur Veil so scrolled card × buttons & titles fade cleanly behind bottom bar
         val navBottomDp = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
-        OverviewProgressiveBlurEdge(
-            backdrop = overviewBackdrop,
-            height = navBottomDp + if (layoutProfile == BrowserLayoutProfile.PHONE_LANDSCAPE) 78.dp else 108.dp,
-            isDark = overviewDark,
-            isTop = false,
-            blurEnabled = overviewBackdropEnabled,
-            modifier = Modifier.align(Alignment.BottomCenter),
-        )
+        if (!isTabletOverview || state.isOverviewSearchActive || isSelectionMode) {
+            OverviewProgressiveBlurEdge(
+                backdrop = overviewBackdrop,
+                height = navBottomDp + if (layoutProfile == BrowserLayoutProfile.PHONE_LANDSCAPE) 78.dp else 108.dp,
+                isDark = overviewDark,
+                isTop = false,
+                blurEnabled = overviewBackdropEnabled,
+                modifier = Modifier.align(Alignment.BottomCenter),
+            )
+        }
 
-        // Bottom Chrome: Search Bar, Selection Action Bar, or Dynamic Expanding Group Switcher
+        // Bottom Chrome: Search Bar, Selection Action Bar, or Phone Dynamic Expanding Group Switcher
         val barMaxWidth = if (layoutProfile == BrowserLayoutProfile.PHONE_PORTRAIT) 520.dp else 440.dp
         val barVertPad = if (layoutProfile == BrowserLayoutProfile.PHONE_LANDSCAPE) 6.dp else 12.dp
-        if (!state.showSettingsSheet) {
+        if (!isTabletOverview || state.isOverviewSearchActive || isSelectionMode) {
             LiquidKitTheme(opacity = liquidKitAppearance().opacity, dark = overviewDark) {
             Box(
                 modifier = Modifier
@@ -1242,7 +1293,7 @@ fun TabOverviewScreen(
         }
 
         // Real LiquidKit Card Context Menu (authentic refractive Liquid Glass with Move Submenu)
-        com.kyant.backdrop.components.LiquidMenuHost(
+        LiquidKitContextMenuHost(
             state = cardContextMenuState,
             backdrop = overviewBackdrop,
             submenuInk = overviewColors.ink,
@@ -1256,7 +1307,7 @@ fun TabOverviewScreen(
                         reveal.snapTo(0f)
                         reveal.animateTo(1f, LiquidKitSpring.swiftUI(0.30f, 0.84f).spec)
                     }
-                    val menuMetrics = com.kyant.backdrop.components.liquidMenuMetrics()
+                    val menuMetrics = liquidKitMenuMetrics()
 
                     BoxWithConstraints(
                         modifier = Modifier
@@ -1403,7 +1454,7 @@ fun TabOverviewScreen(
                                     scaleY = s
                                 },
                         ) {
-                            com.kyant.backdrop.components.LiquidMenuPanel(
+                            LiquidKitMenuPanel(
                                 state = cardContextMenuState,
                                 items = cardContextMenuItems,
                                 ink = overviewColors.ink,
@@ -1414,6 +1465,216 @@ fun TabOverviewScreen(
                 }
             },
         ) {}
+    }
+}
+
+@Composable
+private fun TabletOverviewTopBar(
+    groups: List<TabGroup>,
+    state: TerraBrowserState,
+    pagerState: androidx.compose.foundation.pager.PagerState,
+    groupsMenuState: io.liquidkit.LiquidKitMenuState,
+    groupsMenuItems: List<LiquidKitMenuItem>,
+    moreMenuState: io.liquidkit.LiquidKitMenuState,
+    moreMenuItems: List<LiquidKitMenuItem>,
+    backdrop: Backdrop,
+    ink: Color,
+    secondary: Color,
+    accentBlue: Color,
+    isSearchActive: Boolean,
+    onToggleSearch: () -> Unit,
+    onAddTab: () -> Unit,
+    onDone: () -> Unit,
+) {
+    val scope = rememberCoroutineScope()
+    val pillHighlightColor = if (state.activeGroup.isPrivate || liquidKitAppearance().dark) {
+        Color.White.copy(alpha = 0.16f)
+    } else {
+        Color.Black.copy(alpha = 0.08f)
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .statusBarsPadding()
+            .displayCutoutPadding()
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+    ) {
+        Row(
+            modifier = Modifier.align(Alignment.CenterStart),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            LiquidKitAnchoredMenuHost(
+                state = groupsMenuState,
+                items = groupsMenuItems,
+                backdrop = backdrop,
+                presentation = LiquidKitMenuPresentation.ButtonTransform,
+            ) {
+                LiquidKitIconButton(
+                    onClick = { if (groupsMenuItems.isNotEmpty()) groupsMenuState.show() },
+                    backdrop = backdrop,
+                    size = 44.dp,
+                    modifier = Modifier
+                        .liquidKitMenuSource(groupsMenuState, cornerRadius = 22.dp)
+                        .then(
+                            if (groupsMenuItems.isNotEmpty() || groupsMenuState.expanded) {
+                                Modifier.liquidKitMenuTrigger(
+                                    state = groupsMenuState,
+                                    activation = LiquidKitMenuActivation.Press,
+                                )
+                            } else {
+                                Modifier
+                            },
+                        ),
+                ) {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        SafariSidebarIcon(color = ink, modifier = Modifier.size(18.dp))
+                    }
+                }
+            }
+
+            LiquidKitAnchoredMenuHost(
+                state = moreMenuState,
+                items = moreMenuItems,
+                backdrop = backdrop,
+                presentation = LiquidKitMenuPresentation.ButtonTransform,
+            ) {
+                LiquidKitIconButton(
+                    onClick = { if (moreMenuItems.isNotEmpty()) moreMenuState.show() },
+                    backdrop = backdrop,
+                    size = 44.dp,
+                    modifier = Modifier
+                        .liquidKitMenuSource(moreMenuState, cornerRadius = 22.dp)
+                        .then(
+                            if (moreMenuItems.isNotEmpty() || moreMenuState.expanded) {
+                                Modifier.liquidKitMenuTrigger(
+                                    state = moreMenuState,
+                                    activation = LiquidKitMenuActivation.Press,
+                                )
+                            } else {
+                                Modifier
+                            },
+                        ),
+                ) {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        TerraSymbolIcon(symbol = LiquidKitSymbol.More, tint = ink, modifier = Modifier.size(19.dp))
+                    }
+                }
+            }
+        }
+
+        // Center iPadOS Group Switcher Capsule
+        LiquidKitGlassSurface(
+            backdrop = backdrop,
+            shape = CircleShape,
+            modifier = Modifier
+                .align(Alignment.Center)
+                .widthIn(max = 420.dp)
+                .height(44.dp),
+        ) {
+            Row(
+                modifier = Modifier
+                    .horizontalScroll(rememberScrollState())
+                    .padding(horizontal = 4.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                groups.forEachIndexed { idx, grp ->
+                    val selected = pagerState.currentPage == idx
+                    val title = if (grp.isPrivate) "无痕浏览" else if (grp.isDefault) "${state.tabsInGroup(grp.id).size} 个标签页" else grp.name
+                    Box(
+                        modifier = Modifier
+                            .height(36.dp)
+                            .clip(CircleShape)
+                            .background(if (selected) pillHighlightColor else Color.Transparent)
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null,
+                            ) {
+                                scope.launch {
+                                    pagerState.animateScrollToPage(idx)
+                                    state.selectGroup(grp.id)
+                                }
+                            }
+                            .padding(horizontal = 14.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        BasicText(
+                            text = title,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            style = TextStyle(
+                                color = if (selected) ink else secondary,
+                                fontSize = 14.sp,
+                                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+                            ),
+                        )
+                    }
+                }
+            }
+        }
+
+        // Right cluster: [+ | Search] combined pill + Blue Done Check
+        Row(
+            modifier = Modifier.align(Alignment.CenterEnd),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            LiquidKitGlassSurface(
+                backdrop = backdrop,
+                shape = CircleShape,
+                interactive = true,
+                modifier = Modifier.height(44.dp),
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(40.dp)
+                            .clip(CircleShape)
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null,
+                                onClick = onAddTab,
+                            ),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        TerraSymbolIcon(symbol = LiquidKitSymbol.Add, tint = ink, modifier = Modifier.size(19.dp))
+                    }
+                    Box(
+                        modifier = Modifier
+                            .size(40.dp)
+                            .clip(CircleShape)
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null,
+                                onClick = onToggleSearch,
+                            ),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        TerraSymbolIcon(
+                            symbol = LiquidKitSymbol.Search,
+                            tint = if (isSearchActive) accentBlue else ink,
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
+                }
+            }
+
+            LiquidKitIconButton(
+                onClick = onDone,
+                backdrop = backdrop,
+                size = 44.dp,
+                tint = accentBlue,
+            ) {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    TerraSymbolIcon(symbol = LiquidKitSymbol.Check, tint = Color.White, modifier = Modifier.size(18.dp))
+                }
+            }
+        }
     }
 }
 

@@ -29,6 +29,8 @@ import com.terra.browser.model.SiteDarkMode
 import com.terra.browser.model.TabBarMode
 import com.terra.browser.model.TabGroup
 import com.terra.browser.model.TabSortMode
+import com.terra.browser.reader.ReaderArticle
+import com.terra.browser.reader.ReaderStyle
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.Locale
@@ -101,6 +103,15 @@ class TerraBrowserState(
 
     var newGroupDraft by mutableStateOf("")
     var onBackDismissChromeMenu: (() -> Boolean)? = null
+
+    var activeReaderTabId by mutableStateOf<String?>(null)
+    var activeReaderArticle by mutableStateOf<ReaderArticle?>(null)
+    var readerStyle by mutableStateOf(ReaderStyle())
+
+    fun closeReader() {
+        activeReaderTabId = null
+        activeReaderArticle = null
+    }
 
     private val persistExecutor = if (prefs != null) Executors.newSingleThreadExecutor() else null
     private val persistHandler = if (prefs != null) runCatching { Handler(Looper.getMainLooper()) }.getOrNull() else null
@@ -299,6 +310,7 @@ class TerraBrowserState(
 
     fun selectGroup(groupId: String) {
         if (tabGroups.none { it.id == groupId }) return
+        closeReader()
         activeGroupId = groupId
         ensureGroupActiveTabs()
         persist()
@@ -306,6 +318,9 @@ class TerraBrowserState(
 
     fun selectTab(tabId: String) {
         val tab = tabs.firstOrNull { it.id == tabId } ?: return
+        if (activeReaderTabId != null && activeReaderTabId != tabId) {
+            closeReader()
+        }
         activeGroupId = tab.groupId
         activeTabIdByGroup[tab.groupId] = tab.id
         updateTab(tab.id) { it.copy(lastActiveAt = System.currentTimeMillis()) }
@@ -349,6 +364,7 @@ class TerraBrowserState(
     }
 
     fun closeTab(tabId: String) {
+        if (activeReaderTabId == tabId) closeReader()
         val idx = tabs.indexOfFirst { it.id == tabId }
         if (idx < 0) return
         val closing = tabs[idx]
@@ -374,6 +390,7 @@ class TerraBrowserState(
 
     fun closeAllTabsInGroup(groupId: String = activeGroup.id) {
         val ids = tabs.filter { it.groupId == groupId }.map { it.id }
+        if (activeReaderTabId in ids) closeReader()
         tabs.removeAll { it.groupId == groupId }
         ids.forEach {
             thumbnails.remove(it)
@@ -388,6 +405,7 @@ class TerraBrowserState(
         val keeper = tabs.firstOrNull { it.id == keepTabId } ?: return
         val gId = keeper.groupId
         val toRemove = tabs.filter { it.groupId == gId && it.id != keepTabId }.map { it.id }
+        if (activeReaderTabId in toRemove) closeReader()
         tabs.removeAll { it.groupId == gId && it.id != keepTabId }
         toRemove.forEach {
             thumbnails.remove(it)
@@ -485,6 +503,7 @@ class TerraBrowserState(
     fun navigateActiveTab(rawInput: String) {
         val targetUrl = BrowserUrlUtils.normalizeInputToUrl(rawInput, searchEngine)
         if (targetUrl.isBlank()) return
+        closeReader()
         val trimmed = rawInput.trim()
         if (!activeGroup.isPrivate && trimmed.isNotEmpty() && !trimmed.contains("://")) {
             recentSearches.removeAll { it.equals(trimmed, ignoreCase = true) }
@@ -513,6 +532,7 @@ class TerraBrowserState(
     }
 
     fun navigateToStartPage() {
+        closeReader()
         val tab = activeTab
         updateTab(tab.id) {
             it.copy(

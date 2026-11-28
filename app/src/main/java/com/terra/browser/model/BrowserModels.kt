@@ -171,6 +171,7 @@ enum class LibraryTab(val label: String) {
     BOOKMARKS("书签"),
     READING_LIST("阅读列表"),
     HISTORY("历史记录"),
+    DOWNLOADS("下载项"),
 }
 
 enum class ContextHitType {

@@ -33,6 +33,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
@@ -125,11 +126,13 @@ import com.terra.browser.state.TerraBrowserState
 import com.terra.browser.webview.TerraWebViewPool
 import io.liquidkit.LiquidKitAnchoredMenuHost
 import io.liquidkit.LiquidKitBorderlessButton
+import io.liquidkit.LiquidKitContextMenuHost
 import io.liquidkit.LiquidKitGlassSurface
 import io.liquidkit.LiquidKitHaptic
 import io.liquidkit.LiquidKitIconButton
 import io.liquidkit.LiquidKitMenuActivation
 import io.liquidkit.LiquidKitMenuItem
+import io.liquidkit.LiquidKitMenuPanel
 import io.liquidkit.LiquidKitMenuPresentation
 import io.liquidkit.LiquidKitSpring
 import io.liquidkit.LiquidKitSymbol
@@ -137,13 +140,16 @@ import io.liquidkit.LiquidKitText
 import io.liquidkit.liquidKitAppearance
 import io.liquidkit.liquidKitBackdrop
 import io.liquidkit.liquidKitColors
+import io.liquidkit.liquidKitMenuMetrics
 import io.liquidkit.liquidKitMenuSource
 import io.liquidkit.liquidKitMenuTrigger
+import io.liquidkit.liquidKitPopoverAnchor
 import io.liquidkit.liquidKitTypography
 import io.liquidkit.LiquidKitTheme
 import io.liquidkit.rememberLiquidKitBackdrop
 import io.liquidkit.rememberLiquidKitHaptics
 import io.liquidkit.rememberLiquidKitMenuState
+import io.liquidkit.rememberLiquidKitPopoverAnchorState
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -157,17 +163,6 @@ internal fun safariDockGlassTint(isDark: Boolean, isPrivate: Boolean): Color = w
     isPrivate -> Color(0xFF1D1F27).copy(alpha = 0.62f)
     isDark -> Color(0xFF1B1D24).copy(alpha = 0.56f)
     else -> Color(0xFFF6F7FB).copy(alpha = 0.42f)
-}
-
-internal fun showMenuExclusively(
-    target: io.liquidkit.LiquidKitMenuState,
-    allMenus: List<io.liquidkit.LiquidKitMenuState>,
-) {
-    for (menu in allMenus) {
-        if (menu !== target && menu.expanded) {
-            menu.dismiss()
-        }
-    }
 }
 
 internal fun dynamicRoundedCornerShape(
@@ -207,7 +202,7 @@ internal fun AnchoredGlassMenuOverlay(
         }
     }
     BackHandler(enabled = menuState.expanded) { menuState.dismiss() }
-    com.kyant.backdrop.components.LiquidMenuHost(
+    LiquidKitContextMenuHost(
         state = menuState,
         backdrop = backdrop,
         modifier = modifier,
@@ -220,7 +215,7 @@ internal fun AnchoredGlassMenuOverlay(
                     reveal.snapTo(0f)
                     reveal.animateTo(1f, LiquidKitSpring.swiftUI(0.28f, 0.84f).spec)
                 }
-                val menuMetrics = com.kyant.backdrop.components.liquidMenuMetrics()
+                val menuMetrics = liquidKitMenuMetrics()
                 val statusTopDp = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
                 val navBottomDp = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
                 val cutoutPadding = WindowInsets.displayCutout.asPaddingValues()
@@ -321,7 +316,7 @@ internal fun AnchoredGlassMenuOverlay(
                                 transformOrigin = TransformOrigin(menuOriginX, menuOriginY)
                             },
                     ) {
-                        com.kyant.backdrop.components.LiquidMenuPanel(
+                        LiquidKitMenuPanel(
                             state = menuState,
                             items = items,
                             ink = ink,
@@ -466,12 +461,7 @@ fun SafariTopAddressBar(
         )
     }
 
-    val topMenus = remember(pageMenuState, addressLongPressMenuState) {
-        listOf(pageMenuState, addressLongPressMenuState)
-    }
-    val openMenuExclusively: (io.liquidkit.LiquidKitMenuState) -> Unit = remember(topMenus) {
-        { target -> showMenuExclusively(target, topMenus) }
-    }
+    val openMenuExclusively: (io.liquidkit.LiquidKitMenuState) -> Unit = remember { { } }
 
     val collapseState = animateFloatAsState(
         targetValue = if (state.isToolbarMinimized) 1f else 0f,
@@ -513,7 +503,7 @@ fun SafariTopAddressBar(
             lerp(fullPillWidthPx, miniPillWidthPx, c) + gapPx
         }
         val swipeTxProvider: () -> Float = { latestSwipeFraction() * currentStepPx() }
-        val topPillBoundsRef = remember { arrayOfNulls<Rect>(1) }
+        val topPillAnchor = rememberLiquidKitPopoverAnchorState()
 
         Box(
             modifier = Modifier
@@ -524,13 +514,13 @@ fun SafariTopAddressBar(
                     val placeable = measurable.measure(Constraints.fixed(wPx, hPx))
                     layout(wPx, hPx) { placeable.placeRelative(0, 0) }
                 }
-                .onGloballyPositioned { if (it.isAttached) topPillBoundsRef[0] = it.boundsInRoot() },
+                .liquidKitPopoverAnchor(topPillAnchor),
         ) {
             AnchoredGlassMenuOverlay(
                 menuState = addressLongPressMenuState,
                 items = addressLongPressItems,
                 backdrop = backdrop,
-                anchorBoundsProvider = { topPillBoundsRef[0] },
+                anchorBoundsProvider = { topPillAnchor.boundsInRoot },
                 ink = colors.ink,
                 isDark = isDark,
                 centerHorizontally = true,
@@ -848,9 +838,7 @@ fun SafariBottomDock(
             newTabQuickMenuState,
         )
     }
-    val openMenuExclusively: (io.liquidkit.LiquidKitMenuState) -> Unit = remember(allDockMenus) {
-        { target -> showMenuExclusively(target, allDockMenus) }
-    }
+    val openMenuExclusively: (io.liquidkit.LiquidKitMenuState) -> Unit = remember { { } }
 
     val dockSpring = remember { LiquidKitSpring.swiftUI(0.36f, 0.86f) }
     val collapseState = animateFloatAsState(
@@ -1228,7 +1216,7 @@ fun SafariBottomDock(
                             val swipeTxProvider: () -> Float = { latestSwipeFraction() * currentStepPx() }
                             val compactTint = safariDockGlassTint(isDark, state.activeGroup.isPrivate)
 
-                            val compactPillBoundsRef = remember { arrayOfNulls<Rect>(1) }
+                            val compactPillAnchor = rememberLiquidKitPopoverAnchorState()
                             Box(
                                 modifier = Modifier
                                     .layout { measurable, _ ->
@@ -1238,14 +1226,14 @@ fun SafariBottomDock(
                                         val placeable = measurable.measure(Constraints.fixed(wPx, hPx))
                                         layout(wPx, hPx) { placeable.placeRelative(0, 0) }
                                     }
-                                    .onGloballyPositioned { if (it.isAttached) compactPillBoundsRef[0] = it.boundsInRoot() }
+                                    .liquidKitPopoverAnchor(compactPillAnchor)
                                     .graphicsLayer { alpha = compactCenterAlphaState.value },
                             ) {
                                 AnchoredGlassMenuOverlay(
                                     menuState = addressLongPressMenuState,
                                     items = addressLongPressItems,
                                     backdrop = backdrop,
-                                    anchorBoundsProvider = { compactPillBoundsRef[0] },
+                                    anchorBoundsProvider = { compactPillAnchor.boundsInRoot },
                                     ink = colors.ink,
                                     isDark = isDark,
                                     centerHorizontally = true,
@@ -1372,7 +1360,7 @@ fun SafariBottomDock(
                                 Column(
                                     modifier = Modifier.fillMaxWidth(),
                                 ) {
-                                    val bottomPillBoundsRef = remember { arrayOfNulls<Rect>(1) }
+                                    val bottomPillAnchor = rememberLiquidKitPopoverAnchorState()
                                     val gap12Px = with(density) { 12.dp.toPx() }
                                     val padHFullPx = with(density) { 10.dp.toPx() }
                                     val padHMiniPx = with(density) { 5.dp.toPx() }
@@ -1387,7 +1375,7 @@ fun SafariBottomDock(
                                         menuState = addressLongPressMenuState,
                                         items = addressLongPressItems,
                                         backdrop = backdrop,
-                                        anchorBoundsProvider = { bottomPillBoundsRef[0] },
+                                        anchorBoundsProvider = { bottomPillAnchor.boundsInRoot },
                                         ink = colors.ink,
                                         isDark = isDark,
                                         centerHorizontally = true,
@@ -1417,7 +1405,7 @@ fun SafariBottomDock(
                                                     placeable.placeRelative(ph, pv)
                                                 }
                                             }
-                                            .onGloballyPositioned { if (it.isAttached) bottomPillBoundsRef[0] = it.boundsInRoot() },
+                                            .liquidKitPopoverAnchor(bottomPillAnchor),
                                     ) {
                                         BoxWithConstraints(
                                             modifier = Modifier
@@ -1668,7 +1656,7 @@ private fun PhoneLandscapeBar(
         }
     }
     val clusterTint = safariDockGlassTint(isDark, state.activeGroup.isPrivate)
-    val landPillBoundsRef = remember { arrayOfNulls<Rect>(1) }
+    val landPillAnchor = rememberLiquidKitPopoverAnchorState()
 
     BoxWithConstraints(
         modifier = Modifier
@@ -1778,13 +1766,13 @@ private fun PhoneLandscapeBar(
                         placeable.placeRelative(0, 0)
                     }
                 }
-                .onGloballyPositioned { if (it.isAttached) landPillBoundsRef[0] = it.boundsInRoot() },
+                .liquidKitPopoverAnchor(landPillAnchor),
         ) {
             AnchoredGlassMenuOverlay(
                 menuState = addressLongPressMenuState,
                 items = addressLongPressItems,
                 backdrop = backdrop,
-                anchorBoundsProvider = { landPillBoundsRef[0] },
+                anchorBoundsProvider = { landPillAnchor.boundsInRoot },
                 ink = ink,
                 isDark = isDark,
                 centerHorizontally = true,
@@ -2965,7 +2953,12 @@ internal fun FindInPageGlassBar(
 fun AddressEditingOverlay(
     state: TerraBrowserState,
     progress: Float,
+    layoutProfile: BrowserLayoutProfile = BrowserLayoutProfile.PHONE_PORTRAIT,
     onSubmitInput: (String) -> Unit,
+    onSelectOpenTab: (String) -> Unit = { tabId ->
+        state.selectTab(tabId)
+        state.isAddressEditing = false
+    },
     onDismiss: () -> Unit,
 ) {
     val isDark = liquidKitAppearance().dark
@@ -2976,6 +2969,7 @@ fun AddressEditingOverlay(
     val focusManager = LocalFocusManager.current
     val latestProgress = rememberUpdatedState(progress)
     val isEditing = state.isAddressEditing
+    val isTabletLayout = layoutProfile == BrowserLayoutProfile.TABLET_LANDSCAPE
 
     var textFieldValue by remember {
         val initial = state.addressDraft
@@ -2995,6 +2989,24 @@ fun AddressEditingOverlay(
     val solidBg = if (isDark) Color(0xFF0E1015) else Color(0xFFF2F4F8)
 
     val query = textFieldValue.text.trim()
+    val currentTab = state.activeTab
+    val isPrivateGroup = state.activeGroup.isPrivate
+    val matchedOpenTabs = remember(query, currentTab.id, isPrivateGroup, state.tabs.size) {
+        if (query.isEmpty()) {
+            emptyList()
+        } else {
+            state.tabs.filter { t ->
+                val grp = state.tabGroups.firstOrNull { it.id == t.groupId }
+                t.id != currentTab.id &&
+                    (grp?.isPrivate == true) == isPrivateGroup &&
+                    t.url.isNotBlank() &&
+                    (t.title.contains(query, ignoreCase = true) || t.url.contains(query, ignoreCase = true))
+            }.sortedWith(
+                compareByDescending<BrowserTab> { it.groupId == currentTab.groupId }
+                    .thenByDescending { it.title.startsWith(query, ignoreCase = true) },
+            ).take(4)
+        }
+    }
     val matchedItems = remember(query, state.favorites.size, state.bookmarks.size, state.readingList.size, state.history.size) {
         if (query.isEmpty()) {
             emptyList()
@@ -3013,6 +3025,238 @@ fun AddressEditingOverlay(
             }.map { Triple(it.title, it.url, "历史") }
             (favs + bms + rds + his).distinctBy { it.second }.take(8)
         }
+    }
+
+    val glassTint = if (isDark) Color(0xFF1F222A).copy(alpha = 0.96f) else Color.White.copy(alpha = 0.97f)
+    val borderMaxAlpha = if (isDark) 0.22f else 0.75f
+
+    if (isTabletLayout) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer {
+                    val p = latestProgress.value.coerceIn(0f, 1f)
+                    alpha = (p * 1.4f).coerceIn(0f, 1f)
+                }
+                .drawBehind {
+                    val p = latestProgress.value.coerceIn(0f, 1f)
+                    val a = (if (isDark) 0.42f else 0.24f) * p
+                    if (a > 0.001f) drawRect(Color.Black.copy(alpha = a))
+                }
+                .then(
+                    if (isEditing) {
+                        Modifier.clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                            onClick = onDismiss,
+                        )
+                    } else {
+                        Modifier
+                    },
+                ),
+            contentAlignment = Alignment.TopCenter,
+        ) {
+            Column(
+                modifier = Modifier
+                    .widthIn(max = 580.dp)
+                    .fillMaxWidth()
+                    .statusBarsPadding()
+                    .displayCutoutPadding()
+                    .imePadding()
+                    .padding(horizontal = 16.dp, vertical = 6.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .graphicsLayer {
+                            val p = latestProgress.value.coerceIn(0f, 1f)
+                            val s = lerp(0.95f, 1f, p)
+                            scaleX = s
+                            scaleY = s
+                            alpha = (p * 1.35f).coerceIn(0f, 1f)
+                        },
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(44.dp)
+                            .clip(RoundedCornerShape(22.dp))
+                            .background(glassTint)
+                            .border(0.75.dp, colors.ink.copy(alpha = 0.14f), RoundedCornerShape(22.dp))
+                            .padding(horizontal = 14.dp),
+                        contentAlignment = Alignment.CenterStart,
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxSize(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            TerraSymbolIcon(symbol = LiquidKitSymbol.Search, tint = colors.secondary, modifier = Modifier.size(18.dp))
+                            BasicTextField(
+                                value = textFieldValue,
+                                onValueChange = { if (isEditing) textFieldValue = it },
+                                enabled = isEditing,
+                                singleLine = true,
+                                textStyle = TextStyle(color = colors.ink, fontSize = 15.sp),
+                                cursorBrush = SolidColor(accentBlue),
+                                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
+                                keyboardActions = KeyboardActions(
+                                    onGo = { if (isEditing && textFieldValue.text.isNotBlank()) onSubmitInput(textFieldValue.text) },
+                                ),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .focusRequester(focusRequester),
+                                decorationBox = { inner ->
+                                    if (textFieldValue.text.isEmpty()) {
+                                        BasicText("搜索或输入网站名称", style = TextStyle(color = colors.secondary, fontSize = 15.sp))
+                                    }
+                                    inner()
+                                },
+                            )
+                            if (textFieldValue.text.isNotEmpty()) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(20.dp)
+                                        .clip(CircleShape)
+                                        .background(colors.secondary.copy(alpha = 0.25f))
+                                        .clickable(
+                                            interactionSource = remember { MutableInteractionSource() },
+                                            indication = null,
+                                            enabled = isEditing,
+                                        ) { textFieldValue = TextFieldValue("") },
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    TerraSymbolIcon(symbol = LiquidKitSymbol.Close, tint = colors.ink, modifier = Modifier.size(12.dp))
+                                }
+                            }
+                        }
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .size(44.dp)
+                            .clip(CircleShape)
+                            .background(glassTint)
+                            .border(0.75.dp, colors.ink.copy(alpha = 0.14f), CircleShape)
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null,
+                                enabled = isEditing,
+                                onClick = onDismiss,
+                            ),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        TerraSymbolIcon(symbol = LiquidKitSymbol.Close, tint = colors.ink, modifier = Modifier.size(18.dp))
+                    }
+                }
+
+                // In-place anchored tablet popover card directly below URL bar
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 460.dp)
+                        .clip(RoundedCornerShape(24.dp))
+                        .background(solidBg.copy(alpha = 0.96f))
+                        .border(0.75.dp, colors.ink.copy(alpha = 0.12f), RoundedCornerShape(24.dp))
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                        ) { }
+                        .graphicsLayer {
+                            val p = latestProgress.value.coerceIn(0f, 1f)
+                            alpha = p
+                            translationY = lerp(-12.dp.toPx(), 0f, p)
+                        },
+                ) {
+                    LazyColumn(
+                        contentPadding = PaddingValues(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        if (query.isEmpty()) {
+                            if (state.favorites.isNotEmpty()) {
+                                item("tab_fav_hdr") {
+                                    BasicText(
+                                        text = "个人收藏",
+                                        style = TextStyle(color = colors.ink, fontSize = 14.sp, fontWeight = FontWeight.Bold),
+                                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
+                                    )
+                                }
+                                items(state.favorites.take(6), key = { "tfav_${it.id}" }) { fav ->
+                                    SuggestionRow(
+                                        icon = LiquidKitSymbol.StarFilled,
+                                        title = fav.title,
+                                        subtitle = BrowserUrlUtils.displayHost(fav.url),
+                                        ink = colors.ink,
+                                        secondary = colors.secondary,
+                                        isDark = isDark,
+                                        enabled = isEditing,
+                                    ) { onSubmitInput(fav.url) }
+                                }
+                            }
+                            if (state.showRecentSearches && state.recentSearches.isNotEmpty()) {
+                                item("tab_rs_hdr") {
+                                    BasicText(
+                                        text = "最近搜索",
+                                        style = TextStyle(color = colors.ink, fontSize = 14.sp, fontWeight = FontWeight.Bold),
+                                        modifier = Modifier.padding(start = 4.dp, top = 6.dp, bottom = 2.dp),
+                                    )
+                                }
+                                items(state.recentSearches.take(5), key = { "trs_$it" }) { rs ->
+                                    SuggestionRow(
+                                        icon = LiquidKitSymbol.Search,
+                                        title = rs,
+                                        subtitle = "${state.searchEngine.label} 搜索",
+                                        ink = colors.ink,
+                                        secondary = colors.secondary,
+                                        isDark = isDark,
+                                        enabled = isEditing,
+                                    ) { onSubmitInput(rs) }
+                                }
+                            }
+                        } else {
+                            items(matchedOpenTabs, key = { "tab_open_${it.id}" }) { openTab ->
+                                val grpName = state.tabGroups.firstOrNull { it.id == openTab.groupId }?.name ?: "标签页"
+                                SuggestionRow(
+                                    icon = LiquidKitSymbol.SquareOnSquare,
+                                    title = openTab.title.ifBlank { openTab.url },
+                                    subtitle = "切换到标签页 · $grpName · ${BrowserUrlUtils.displayHost(openTab.url)}",
+                                    ink = accentBlue,
+                                    secondary = colors.secondary,
+                                    isDark = isDark,
+                                    enabled = isEditing,
+                                ) { onSelectOpenTab(openTab.id) }
+                            }
+                            item("tab_direct_search") {
+                                SuggestionRow(
+                                    icon = LiquidKitSymbol.Search,
+                                    title = "使用 ${state.searchEngine.label} 搜索“$query”",
+                                    subtitle = BrowserUrlUtils.normalizeInputToUrl(query, state.searchEngine),
+                                    ink = accentBlue,
+                                    secondary = colors.secondary,
+                                    isDark = isDark,
+                                    enabled = isEditing,
+                                ) { onSubmitInput(query) }
+                            }
+                            items(matchedItems, key = { "tab_hit_${it.second}" }) { (title, url, kind) ->
+                                SuggestionRow(
+                                    icon = LiquidKitSymbol.Globe,
+                                    title = title,
+                                    subtitle = "$kind · ${BrowserUrlUtils.displayHost(url)}",
+                                    ink = colors.ink,
+                                    secondary = colors.secondary,
+                                    isDark = isDark,
+                                    enabled = isEditing,
+                                ) { onSubmitInput(url) }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return
     }
 
     Box(
@@ -3173,6 +3417,20 @@ fun AddressEditingOverlay(
                         }
                     }
                 } else {
+                    items(matchedOpenTabs, key = { "open_tab_${it.id}" }) { openTab ->
+                        val grpName = state.tabGroups.firstOrNull { it.id == openTab.groupId }?.name ?: "标签页"
+                        SuggestionRow(
+                            icon = LiquidKitSymbol.SquareOnSquare,
+                            title = openTab.title.ifBlank { openTab.url },
+                            subtitle = "切换到标签页 · $grpName · ${BrowserUrlUtils.displayHost(openTab.url)}",
+                            ink = accentBlue,
+                            secondary = colors.secondary,
+                            isDark = isDark,
+                            enabled = isEditing,
+                        ) {
+                            onSelectOpenTab(openTab.id)
+                        }
+                    }
                     item("direct_search") {
                         SuggestionRow(
                             icon = LiquidKitSymbol.Search,
@@ -3222,9 +3480,6 @@ fun AddressEditingOverlay(
         )
 
         // Foreground focused URL input bar smoothly morphing up into Liquid Glass (search chips safely at top)
-        val glassTint = if (isDark) Color(0xFF1F222A).copy(alpha = 0.96f) else Color.White.copy(alpha = 0.97f)
-        val borderMaxAlpha = if (isDark) 0.22f else 0.75f
-
         Row(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
@@ -3424,6 +3679,17 @@ internal fun buildPageMenuItems(
             ),
         )
     }
+    val readerActive = state.activeReaderTabId == tab.id && state.activeReaderArticle != null
+    list.add(
+        LiquidKitMenuItem(
+            key = "reader",
+            title = if (readerActive) "隐藏阅读器" else "显示阅读器",
+            symbol = LiquidKitSymbol.Document,
+            checked = readerActive,
+            startsSection = compactMode,
+            enabled = !tab.isStartPage,
+        ),
+    )
     enabledConfigs.forEachIndexed { idx, cfg ->
         when (cfg.id) {
             "find" -> list.add(
@@ -3580,6 +3846,20 @@ internal fun handlePageMenuAction(
         key == "open_library" -> {
             state.libraryInitialTab = LibraryTab.BOOKMARKS
             state.showLibrarySheet = true
+        }
+        key == "reader" -> {
+            if (state.activeReaderTabId == tab.id && state.activeReaderArticle != null) {
+                state.closeReader()
+            } else {
+                pool.extractReaderArticle(tab.id) { article ->
+                    if (article != null) {
+                        state.activeReaderTabId = tab.id
+                        state.activeReaderArticle = article
+                    } else {
+                        state.showBanner("当前页面不支持阅读器视图")
+                    }
+                }
+            }
         }
         key == "find" -> state.findInPageVisible = true
         key == "zoom" -> state.showZoomSheet = true

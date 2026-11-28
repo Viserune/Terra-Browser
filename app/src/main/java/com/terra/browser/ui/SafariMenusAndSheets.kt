@@ -60,6 +60,7 @@ import com.terra.browser.model.DarkModePreference
 import com.terra.browser.model.LibraryTab
 import com.terra.browser.model.SearchEngine
 import com.terra.browser.state.TerraBrowserState
+import com.terra.browser.webview.TerraWebViewPool
 import io.liquidkit.LiquidKitActionButton
 import io.liquidkit.LiquidKitActionStyle
 import io.liquidkit.LiquidKitAlert
@@ -87,6 +88,7 @@ import io.liquidkit.liquidKitColors
 @Composable
 fun SafariModalsHost(
     state: TerraBrowserState,
+    pool: TerraWebViewPool,
     backdrop: Backdrop,
     onNavigateUrl: (String) -> Unit,
     onOpenInNewTab: (String) -> Unit,
@@ -337,6 +339,91 @@ fun SafariModalsHost(
                                         controlSize = LiquidKitControlSize.Small,
                                         backdrop = backdrop,
                                     )
+                                }
+                            }
+                        }
+                    }
+                    LibraryTab.DOWNLOADS -> {
+                        val isPrivate = state.activeGroup.isPrivate
+                        val rev = pool.downloads.revision
+                        val downloadsList = remember(isPrivate, rev) { pool.downloads.read(isPrivate) }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+                        ) {
+                            LiquidKitActionButton(
+                                label = "下载目录",
+                                onClick = {
+                                    if (!pool.downloads.openDirectory()) {
+                                        state.showBanner("无法打开系统下载目录")
+                                    }
+                                },
+                                style = LiquidKitActionStyle.Tinted,
+                                tint = accentBlue,
+                                controlSize = LiquidKitControlSize.Small,
+                                backdrop = backdrop,
+                            )
+                            if (downloadsList.any { !it.active }) {
+                                LiquidKitActionButton(
+                                    label = "清理已完成",
+                                    onClick = { pool.downloads.clearInactive(isPrivate) },
+                                    style = LiquidKitActionStyle.Tinted,
+                                    tint = Color(0xFFFF3B30),
+                                    controlSize = LiquidKitControlSize.Small,
+                                    destructive = true,
+                                    backdrop = backdrop,
+                                )
+                            }
+                        }
+                        if (downloadsList.isEmpty()) {
+                            EmptyLibraryNote(
+                                if (isPrivate) "当前无痕会话暂无下载项" else "暂无下载记录",
+                                colors.secondary,
+                            )
+                        } else {
+                            downloadsList.forEach { dl ->
+                                key(dl.id) {
+                                    val statusText = when {
+                                        dl.completed -> "已完成 · ${BrowserUrlUtils.displayHost(dl.url)}"
+                                        dl.failed -> "下载失败 · 点击重试"
+                                        dl.total > 0L -> {
+                                            val pct = ((dl.received * 100L) / dl.total).coerceIn(0L, 100L)
+                                            "下载中 $pct% · ${BrowserUrlUtils.displayHost(dl.url)}"
+                                        }
+                                        else -> "准备中… · ${BrowserUrlUtils.displayHost(dl.url)}"
+                                    }
+                                    LiquidKitSwipeActions(
+                                        rowKey = "dl_${dl.id}",
+                                        trailing = listOf(
+                                            LiquidKitSwipeAction(
+                                                label = if (dl.active) "取消" else "移除",
+                                                symbol = LiquidKitSymbol.Trash,
+                                                color = Color(0xFFFF3B30),
+                                                onClick = { pool.downloads.cancelOrRemove(isPrivate, dl) },
+                                            ),
+                                        ),
+                                    ) {
+                                        LibraryRowCard(
+                                            title = dl.title.ifBlank { BrowserUrlUtils.displayHost(dl.url) },
+                                            subtitle = statusText,
+                                            accentArgb = if (dl.failed) 0xFFFF3B30 else BrowserUrlUtils.accentColorForUrl(dl.url),
+                                            ink = colors.ink,
+                                            secondary = colors.secondary,
+                                            isDark = isDark,
+                                            onClick = {
+                                                if (dl.completed) {
+                                                    if (!pool.downloads.open(dl)) {
+                                                        state.showBanner("请在系统下载目录中查看")
+                                                    }
+                                                } else if (dl.failed) {
+                                                    pool.downloads.enqueue(dl.url, null, null, dl.mime, isPrivate, replaceId = dl.id)
+                                                    state.showBanner("正在重新下载：${dl.title}")
+                                                } else {
+                                                    state.showBanner("正在下载中…")
+                                                }
+                                            },
+                                        )
+                                    }
                                 }
                             }
                         }

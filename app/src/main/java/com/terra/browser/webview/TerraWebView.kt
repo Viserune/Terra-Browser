@@ -8,6 +8,9 @@ import android.webkit.WebView
 import com.terra.browser.model.ContextHitInfo
 import com.terra.browser.model.ContextHitType
 import kotlin.math.abs
+import kotlin.math.roundToInt
+
+data class ReadingPosition(val url: String, val xPx: Int, val yPx: Int)
 
 @SuppressLint("ViewConstructor")
 class TerraWebView(context: Context) : WebView(context) {
@@ -15,6 +18,28 @@ class TerraWebView(context: Context) : WebView(context) {
     var onLongPressHit: ((ContextHitInfo) -> Unit)? = null
     var onTopInteraction: ((topSafeOffsetPx: Float, pullRefreshPx: Float, isDragging: Boolean) -> Unit)? = null
     var onPullRefreshTrigger: (() -> Unit)? = null
+    var pendingReadingPosition: ReadingPosition? = null
+
+    fun rememberReadingPosition(targetUrl: String) {
+        if (targetUrl.isBlank()) return
+        if (scrollX != 0 || scrollY != 0) {
+            pendingReadingPosition = ReadingPosition(targetUrl, scrollX, scrollY)
+        }
+    }
+
+    fun restoreReadingPosition(targetUrl: String, finished: Boolean) {
+        val saved = pendingReadingPosition ?: return
+        if (saved.url != targetUrl) return
+        postVisualStateCallback(0L, object : VisualStateCallback() {
+            override fun onComplete(requestId: Long) {
+                if (this@TerraWebView.url != targetUrl || pendingReadingPosition !== saved) return
+                val maxY = (computeVerticalScrollRange() - height).coerceAtLeast(0)
+                if (!finished && maxY < saved.yPx) return
+                pendingReadingPosition = null
+                scrollTo(saved.xPx.coerceAtLeast(0), saved.yPx.coerceIn(0, maxY))
+            }
+        })
+    }
 
     private val density = resources.displayMetrics.density
     var refreshThresholdPx: Float = density * 72f
@@ -140,6 +165,7 @@ class TerraWebView(context: Context) : WebView(context) {
     override fun onTouchEvent(event: MotionEvent): Boolean {
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
+                pendingReadingPosition = null
                 activePointerId = event.getPointerId(0)
                 lastTouchX = event.getX(0)
                 lastTouchY = event.getY(0)

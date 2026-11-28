@@ -2,8 +2,6 @@ package com.terra.browser.ui
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -12,58 +10,37 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.imePadding
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBars
-import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.input.pointer.util.VelocityTracker
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.zIndex
 import com.kyant.backdrop.Backdrop
 import com.kyant.backdrop.backdrops.rememberSolidColorBackdrop
 import com.terra.browser.model.AutoCloseTabsMode
@@ -79,18 +56,22 @@ import io.liquidkit.LiquidKitAlertRole
 import io.liquidkit.LiquidKitColors
 import io.liquidkit.LiquidKitIconButton
 import io.liquidkit.LiquidKitListSection
+import io.liquidkit.LiquidKitNavigationScaffold
+import io.liquidkit.LiquidKitNavigationSheet
+import io.liquidkit.LiquidKitNavigationTitleMode
 import io.liquidkit.LiquidKitOpacitySlider
 import io.liquidkit.LiquidKitSegmentedPicker
-import io.liquidkit.LiquidKitSpring
+import io.liquidkit.LiquidKitSheetCloseButton
+import io.liquidkit.LiquidKitSheetDetent
 import io.liquidkit.LiquidKitStepper
-import io.liquidkit.LiquidKitSwipeBackNavigation
+import io.liquidkit.LiquidKitSwipeBackStyle
 import io.liquidkit.LiquidKitSymbol
-import io.liquidkit.LiquidKitText
+import io.liquidkit.LocalLiquidKitContentColor
 import io.liquidkit.LocalLiquidKitModalBackdrop
+import io.liquidkit.LocalLiquidKitSheetContext
 import io.liquidkit.liquidKitAppearance
 import io.liquidkit.liquidKitColors
-import io.liquidkit.liquidKitTypography
-import kotlinx.coroutines.launch
+import io.liquidkit.rememberLiquidKitNavStackState
 
 private val DarkModeOptionLabels = DarkModePreference.entries.map { it.label }
 private val SearchEngineOptionLabels = SearchEngine.entries.map { it.label }
@@ -98,14 +79,14 @@ private val OpenLinkOptionLabels = OpenLinkMode.entries.map { it.label }
 private val AutoCloseOptionLabels = AutoCloseTabsMode.entries.map { it.label }
 private val SiteDarkOptionLabels = SiteDarkMode.entries.map { it.label }
 
-private enum class SettingsRoute(val title: String, val depth: Int) {
-    ROOT("设置", 0),
-    APPEARANCE_TAB_BAR("外观与标签栏", 1),
-    SEARCH_START("搜索与起始页", 1),
-    TABS_ACTIONS("标签页与操作", 1),
-    PRIVACY_SECURITY("隐私与安全", 1),
-    WEB_READING("网页与阅读", 1),
-    ABOUT("关于", 1),
+private enum class SettingsRoute(val title: String) {
+    ROOT("设置"),
+    APPEARANCE_TAB_BAR("外观与标签栏"),
+    SEARCH_START("搜索与起始页"),
+    TABS_ACTIONS("标签页与操作"),
+    PRIVACY_SECURITY("隐私与安全"),
+    WEB_READING("网页与阅读"),
+    ABOUT("关于"),
 }
 
 @Composable
@@ -116,261 +97,120 @@ fun SafariSettingsSheet(
 ) {
     val isDark = liquidKitAppearance().dark
     val colors = liquidKitColors(isDark)
-    val sheetBg = if (isDark) Color(0xFF121214) else Color(0xFFF2F2F7)
+    val sheetBg = if (isDark) Color(0xFF1C1C1E) else Color(0xFFF2F2F7)
     val sheetSolidBackdrop = rememberSolidColorBackdrop(sheetBg)
     val modalBackdrop = LocalLiquidKitModalBackdrop.current
     val accentBlue = Color(0xFF0A84FF)
-    val density = LocalDensity.current
-    val scope = rememberCoroutineScope()
     var confirmClearData by remember { mutableStateOf(false) }
-    var currentRoute by remember { mutableStateOf(SettingsRoute.ROOT) }
-    val revealAnim = remember { Animatable(0f) }
-    var dragOffsetY by remember { mutableFloatStateOf(0f) }
-    var isClosing by remember { mutableStateOf(false) }
+    val navState = rememberLiquidKitNavStackState(SettingsRoute.ROOT)
 
-    LaunchedEffect(Unit) {
-        revealAnim.animateTo(1f, LiquidKitSpring.swiftUI(0.32f, 0.90f).spec)
+    BackHandler(enabled = confirmClearData) {
+        confirmClearData = false
     }
 
-    fun dismissSheet() {
-        if (isClosing) return
-        isClosing = true
-        scope.launch {
-            revealAnim.animateTo(0f, tween(190, easing = FastOutSlowInEasing))
-            onDismiss()
-        }
-    }
+    LiquidKitNavigationSheet(
+        onDismissRequest = onDismiss,
+        navState = navState,
+        detents = listOf(LiquidKitSheetDetent.Medium, LiquidKitSheetDetent.Large),
+        initialDetent = LiquidKitSheetDetent.Large,
+        colors = colors,
+        swipeBackStyle = LiquidKitSwipeBackStyle.ClassicParallax,
+        showDragIndicator = true,
+    ) { route, _ ->
+        val listState = rememberLazyListState()
+        val sheetContext = LocalLiquidKitSheetContext.current
+        val isRoot = route == SettingsRoute.ROOT
+        val scaffoldColors = colors.copy(background = sheetBg)
 
-    BackHandler(enabled = true) {
-        when {
-            confirmClearData -> confirmClearData = false
-            currentRoute != SettingsRoute.ROOT -> currentRoute = SettingsRoute.ROOT
-            else -> dismissSheet()
-        }
-    }
-
-    BoxWithConstraints(
-        modifier = Modifier
-            .fillMaxSize()
-            .zIndex(60f),
-    ) {
-        val statusBarTopDp = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
-        val sheetHeightDp = minOf(maxHeight * 0.94f, (maxHeight - statusBarTopDp - 10.dp).coerceAtLeast(320.dp))
-        val sheetHeightPx = with(density) { sheetHeightDp.toPx() }.coerceAtLeast(1f)
-        val sheetShape = remember { RoundedCornerShape(topStart = 32.dp, topEnd = 32.dp) }
-        val topFadeBrush = remember(sheetBg) {
-            Brush.verticalGradient(
-                0.00f to sheetBg,
-                0.70f to sheetBg.copy(alpha = 0.92f),
-                1.00f to Color.Transparent,
-            )
-        }
-
-        // Scrim behind settings sheet
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .drawBehind {
-                    val p = revealAnim.value.coerceIn(0f, 1f)
-                    val dragFade = (1f - dragOffsetY / sheetHeightPx).coerceIn(0f, 1f)
-                    val a = 0.38f * p * dragFade
-                    if (a > 0.001f) {
-                        drawRect(Color.Black.copy(alpha = a))
-                    }
-                }
-                .pointerInput(Unit) {
-                    detectTapGestures { dismissSheet() }
-                },
-        )
-
-        // Full-bleed iOS Settings Sheet Container
-        Box(
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .widthIn(max = 620.dp)
-                .fillMaxWidth()
-                .height(sheetHeightDp)
-                .graphicsLayer {
-                    val hiddenOffset = (1f - revealAnim.value.coerceIn(0f, 1f)) * sheetHeightPx
-                    translationY = (hiddenOffset + dragOffsetY).coerceAtLeast(0f)
-                }
-                .clip(sheetShape)
-                .background(sheetBg)
-                .pointerInput(Unit) {
-                    // Prevent touches inside the sheet from falling through to the scrim
-                    detectTapGestures { }
-                },
-        ) {
-            // Edge-to-edge opaque navigation stack (no outer horizontal clip or outer verticalScroll)
-            LiquidKitSwipeBackNavigation(
-                page = currentRoute,
-                previousPage = if (currentRoute == SettingsRoute.ROOT) null else SettingsRoute.ROOT,
-                depth = { it.depth },
-                contentKey = { it.name },
-                onNavigateBack = { backTarget -> currentRoute = backTarget },
-                predictiveBackEnabled = true,
-                blankSwipeEnabled = true,
-                modifier = Modifier.fillMaxSize(),
-            ) { route ->
-                val typo = liquidKitTypography()
-                val pageScroll = rememberScrollState()
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(sheetBg),
-                ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .verticalScroll(pageScroll)
-                            .padding(start = 18.dp, end = 18.dp, top = 74.dp, bottom = 24.dp)
-                            .navigationBarsPadding()
-                            .imePadding(),
-                        verticalArrangement = Arrangement.spacedBy(16.dp),
-                    ) {
-                        LiquidKitText(
-                            text = route.title,
-                            style = if (route == SettingsRoute.ROOT) typo.largeTitle else typo.title,
-                            color = colors.ink,
-                            modifier = Modifier.padding(horizontal = 4.dp),
+        LiquidKitNavigationScaffold(
+            title = route.title,
+            titleMode = if (isRoot) LiquidKitNavigationTitleMode.Large else LiquidKitNavigationTitleMode.Inline,
+            scrollState = listState,
+            colors = scaffoldColors,
+            leading = { barBackdrop ->
+                AnimatedContent(
+                    targetState = isRoot,
+                    transitionSpec = { fadeIn(tween(140)) togetherWith fadeOut(tween(110)) },
+                    label = "SettingsNavLeading",
+                ) { rootPage ->
+                    if (rootPage) {
+                        LiquidKitSheetCloseButton(
+                            onClick = { sheetContext?.dismiss?.invoke() ?: onDismiss() },
+                            backdrop = barBackdrop,
                         )
-
-                        when (route) {
-                            SettingsRoute.ROOT -> SettingsRootContent(
-                                state = state,
-                                accentBlue = accentBlue,
-                                onNavigate = { currentRoute = it },
-                            )
-                            SettingsRoute.APPEARANCE_TAB_BAR -> AppearanceAndTabBarPage(
-                                state = state,
-                                backdrop = sheetSolidBackdrop,
-                                colors = colors,
-                                accentBlue = accentBlue,
-                            )
-                            SettingsRoute.SEARCH_START -> SearchAndStartPage(
-                                state = state,
-                                backdrop = sheetSolidBackdrop,
-                                colors = colors,
-                                accentBlue = accentBlue,
-                            )
-                            SettingsRoute.TABS_ACTIONS -> TabsAndActionsPage(
-                                state = state,
-                                backdrop = sheetSolidBackdrop,
-                                colors = colors,
-                                accentBlue = accentBlue,
-                                onOpenManageGroups = {
-                                    onDismiss()
-                                    state.showManageGroupsSheet = true
-                                },
-                                onOpenCustomizeMenu = {
-                                    onDismiss()
-                                    state.showCustomizeMenuSheet = true
-                                },
-                            )
-                            SettingsRoute.PRIVACY_SECURITY -> PrivacyAndSecurityPage(
-                                state = state,
-                                accentBlue = accentBlue,
-                                onOpenPrivacyReport = {
-                                    onDismiss()
-                                    state.showPrivacyReportSheet = true
-                                },
-                                onRequestClearData = { confirmClearData = true },
-                            )
-                            SettingsRoute.WEB_READING -> WebAndReadingPage(
-                                state = state,
-                                backdrop = sheetSolidBackdrop,
-                                colors = colors,
-                                accentBlue = accentBlue,
-                            )
-                            SettingsRoute.ABOUT -> AboutPage(state = state, accentBlue = accentBlue)
-                        }
-                    }
-                }
-            }
-
-            // Pinned floating top chrome: header fade + drag-to-dismiss handle + Close/Back icon button
-            val dismissThresholdPx = with(density) { 120.dp.toPx() }
-            val velocityTracker = remember { VelocityTracker() }
-            Box(
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .fillMaxWidth()
-                    .height(74.dp)
-                    .drawBehind { drawRect(brush = topFadeBrush) }
-                    .pointerInput(sheetHeightPx) {
-                        detectVerticalDragGestures(
-                            onDragStart = {
-                                velocityTracker.resetTracking()
-                            },
-                            onVerticalDrag = { change, dragAmount ->
-                                change.consume()
-                                velocityTracker.addPosition(change.uptimeMillis, change.position)
-                                dragOffsetY = (dragOffsetY + dragAmount).coerceAtLeast(0f)
-                            },
-                            onDragCancel = {
-                                val startDrag = dragOffsetY
-                                dragOffsetY = 0f
-                                scope.launch {
-                                    val anim = Animatable(startDrag)
-                                    anim.animateTo(0f, LiquidKitSpring.swiftUI(0.30f, 0.88f).spec) {
-                                        dragOffsetY = value
-                                    }
-                                }
-                            },
-                            onDragEnd = {
-                                val vy = velocityTracker.calculateVelocity().y
-                                if (dragOffsetY > dismissThresholdPx || vy > 1200f) {
-                                    dismissSheet()
-                                } else {
-                                    val startDrag = dragOffsetY
-                                    scope.launch {
-                                        val anim = Animatable(startDrag)
-                                        anim.animateTo(0f, LiquidKitSpring.swiftUI(0.30f, 0.88f).spec) {
-                                            dragOffsetY = value
-                                        }
-                                    }
-                                }
-                            },
-                        )
-                    },
-            ) {
-                Spacer(
-                    modifier = Modifier
-                        .align(Alignment.TopCenter)
-                        .padding(top = 8.dp)
-                        .size(width = 36.dp, height = 5.dp)
-                        .clip(CircleShape)
-                        .background(colors.secondary.copy(alpha = 0.42f)),
-                )
-
-                LiquidKitIconButton(
-                    onClick = {
-                        if (currentRoute == SettingsRoute.ROOT) {
-                            dismissSheet()
-                        } else {
-                            currentRoute = SettingsRoute.ROOT
-                        }
-                    },
-                    backdrop = sheetSolidBackdrop,
-                    size = 42.dp,
-                    modifier = Modifier
-                        .align(Alignment.TopStart)
-                        .padding(start = 18.dp, top = 18.dp),
-                ) {
-                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        AnimatedContent(
-                            targetState = currentRoute == SettingsRoute.ROOT,
-                            transitionSpec = {
-                                fadeIn(tween(140)) togetherWith fadeOut(tween(110))
-                            },
-                            label = "SettingsNavButtonIcon",
-                        ) { isRoot ->
+                    } else {
+                        LiquidKitIconButton(
+                            onClick = { navState.pop() },
+                            backdrop = barBackdrop,
+                            size = 40.dp,
+                        ) {
                             TerraSymbolIcon(
-                                symbol = if (isRoot) LiquidKitSymbol.Close else LiquidKitSymbol.Back,
-                                tint = colors.ink,
+                                symbol = LiquidKitSymbol.Back,
+                                tint = LocalLiquidKitContentColor.current,
                                 modifier = Modifier.size(18.dp),
                             )
                         }
+                    }
+                }
+            },
+        ) { contentPadding ->
+            LazyColumn(
+                state = listState,
+                contentPadding = contentPadding,
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 18.dp),
+            ) {
+                item(key = route.name) {
+                    when (route) {
+                        SettingsRoute.ROOT -> SettingsRootContent(
+                            state = state,
+                            accentBlue = accentBlue,
+                            onNavigate = { navState.push(it) },
+                        )
+                        SettingsRoute.APPEARANCE_TAB_BAR -> AppearanceAndTabBarPage(
+                            state = state,
+                            backdrop = sheetSolidBackdrop,
+                            colors = colors,
+                            accentBlue = accentBlue,
+                        )
+                        SettingsRoute.SEARCH_START -> SearchAndStartPage(
+                            state = state,
+                            backdrop = sheetSolidBackdrop,
+                            colors = colors,
+                            accentBlue = accentBlue,
+                        )
+                        SettingsRoute.TABS_ACTIONS -> TabsAndActionsPage(
+                            state = state,
+                            backdrop = sheetSolidBackdrop,
+                            colors = colors,
+                            accentBlue = accentBlue,
+                            onOpenManageGroups = {
+                                sheetContext?.dismiss?.invoke() ?: onDismiss()
+                                state.showManageGroupsSheet = true
+                            },
+                            onOpenCustomizeMenu = {
+                                sheetContext?.dismiss?.invoke() ?: onDismiss()
+                                state.showCustomizeMenuSheet = true
+                            },
+                        )
+                        SettingsRoute.PRIVACY_SECURITY -> PrivacyAndSecurityPage(
+                            state = state,
+                            accentBlue = accentBlue,
+                            onOpenPrivacyReport = {
+                                sheetContext?.dismiss?.invoke() ?: onDismiss()
+                                state.showPrivacyReportSheet = true
+                            },
+                            onRequestClearData = { confirmClearData = true },
+                        )
+                        SettingsRoute.WEB_READING -> WebAndReadingPage(
+                            state = state,
+                            backdrop = sheetSolidBackdrop,
+                            colors = colors,
+                            accentBlue = accentBlue,
+                        )
+                        SettingsRoute.ABOUT -> AboutPage(state = state, accentBlue = accentBlue)
                     }
                 }
             }

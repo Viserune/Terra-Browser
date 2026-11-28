@@ -108,30 +108,25 @@ import com.terra.browser.model.DarkModePreference
 import com.terra.browser.model.LibraryTab
 import com.terra.browser.model.SiteDarkMode
 import com.terra.browser.model.TabBarMode
+import com.terra.browser.reader.SafariReaderOverlay
 import com.terra.browser.state.TerraBrowserState
 import com.terra.browser.webview.TerraWebViewHost
 import com.terra.browser.webview.TerraWebViewPool
-import com.kyant.backdrop.components.LiquidModalHost
-import com.kyant.backdrop.components.localLiquidModalBackdrop
 import com.kyant.backdrop.drawBackdrop
 import com.kyant.backdrop.effects.blur
 import io.liquidkit.LiquidKitGlassSurface
 import io.liquidkit.LiquidKitHaptic
 import io.liquidkit.LiquidKitOverscrollScope
+import io.liquidkit.LiquidKitRoot
 import io.liquidkit.LiquidKitSpring
 import io.liquidkit.LiquidKitSymbol
-import io.liquidkit.LiquidKitSystemBarAppearance
-import io.liquidkit.LiquidKitTheme
 import io.liquidkit.LiquidKitToast
 import io.liquidkit.LiquidKitToastAlignment
-import io.liquidkit.LocalLiquidKitBackdrop
-import io.liquidkit.LocalLiquidKitModalBackdrop
+import io.liquidkit.LocalLiquidKitSymbolRenderer
 import io.liquidkit.liquidKitBackdrop
 import io.liquidkit.liquidKitColors
 import io.liquidkit.rememberLiquidKitBackdrop
 import io.liquidkit.rememberLiquidKitHaptics
-import io.liquidkit.rememberSolidColorLiquidKitBackdrop
-import io.liquidkit.warmUpLiquidKitPipelines
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
@@ -342,7 +337,7 @@ fun TerraBrowserApp(
         val activeTab = state.activeTab
         val hostActivity = LocalContext.current as? android.app.Activity
 
-        BackHandler(enabled = true) {
+        BackHandler(enabled = !state.showSettingsSheet) {
             when {
                 state.onBackDismissChromeMenu?.invoke() == true -> Unit
                 state.activeContextHit != null -> state.activeContextHit = null
@@ -351,7 +346,6 @@ fun TerraBrowserApp(
                     state.newGroupDraft = ""
                 }
                 state.showManageGroupsSheet -> state.showManageGroupsSheet = false
-                state.showSettingsSheet -> state.showSettingsSheet = false
                 state.showCustomizeMenuSheet -> state.showCustomizeMenuSheet = false
                 state.showZoomSheet -> state.showZoomSheet = false
                 state.showPrivacyReportSheet -> state.showPrivacyReportSheet = false
@@ -363,6 +357,7 @@ fun TerraBrowserApp(
                     state.findQuery = ""
                     pool.clearFind(activeTab.id)
                 }
+                state.activeReaderArticle != null && state.activeReaderTabId == activeTab.id -> state.closeReader()
                 state.isOverviewSearchActive -> {
                     state.isOverviewSearchActive = false
                     state.overviewSearchQuery = ""
@@ -482,6 +477,7 @@ fun TerraBrowserApp(
                 ) {
                     TabletSidebar(
                         state = state,
+                        pool = pool,
                         onCloseSidebar = { state.isTabletSidebarOpen = false },
                     )
                 }
@@ -719,7 +715,13 @@ fun TerraBrowserApp(
 
                 Box(
                     modifier = pageModifier
-                        .liquidKitBackdrop(pageBackdrop, enabled = pageBackdropEnabled),
+                        .liquidKitBackdrop(
+                            backdrop = pageBackdrop,
+                            enabled = isPageVisible,
+                            scale = 0.5f,
+                            frozen = !pageBackdropEnabled,
+                            minRefreshIntervalMillis = 32L,
+                        ),
                 ) {
                     if (activeTab.isStartPage) {
                         StartPage(
@@ -1227,15 +1229,31 @@ fun TerraBrowserApp(
                 },
             )
 
-            // 4. Address / Search Editing Overlay (100% opaque, smooth spring transition)
+            // 4. Address / Search Editing Overlay (100% opaque / Tablet in-place popover)
             AddressOverlayHost(
                 state = state,
+                layoutProfile = layoutProfile,
                 addressEditProgress = addressEditProgress,
             )
+
+            // 4b. Safari Reader Mode Overlay
+            val readerArticle = state.activeReaderArticle
+            if (readerArticle != null && state.activeReaderTabId == activeTab.id && !state.isOverviewOpen) {
+                SafariReaderOverlay(
+                    tab = activeTab,
+                    article = readerArticle,
+                    readerStyle = state.readerStyle,
+                    appDark = appDark,
+                    onUpdateStyle = { state.readerStyle = it },
+                    onOpenUrl = { url -> state.navigateActiveTab(url) },
+                    onClose = { state.closeReader() },
+                )
+            }
 
             // 5. All Safari Modals, Sheets & Web Context Menu
             SafariModalsHost(
                 state = state,
+                pool = pool,
                 backdrop = pageBackdrop,
                 onNavigateUrl = { url -> state.navigateActiveTab(url) },
                 onOpenInNewTab = { url ->
@@ -1580,8 +1598,7 @@ private fun BoxScope.ChromeLayerHost(
         if (layoutProfile != BrowserLayoutProfile.PHONE_LANDSCAPE &&
             state.tabBarMode == TabBarMode.TOP &&
             !state.isOverviewOpen &&
-            !state.isToolbarHidden &&
-            !state.showSettingsSheet
+            !state.isToolbarHidden
         ) {
             SafariTopAddressBar(
                 state = state,
@@ -1597,30 +1614,29 @@ private fun BoxScope.ChromeLayerHost(
             )
         }
 
-        if (!state.showSettingsSheet) {
-            SafariBottomDock(
-                state = state,
-                pool = pool,
-                backdrop = pageBackdrop,
-                alphaFactorProvider = dockAlphaProvider,
-                editProgressProvider = editProgressProvider,
-                tabSwipeFractionProvider = swipeFractionProvider,
-                isDraggingToOverviewProvider = activeGestureProvider,
-                layoutProfile = layoutProfile,
-                onBarDragStart = onBarDragStart,
-                onBarDragDelta = onBarDragDelta,
-                onBarDragEnd = { vx, vy -> onBarDragEnd(vx, vy, true) },
-                onOpenOverview = onOpenOverview,
-                onOpenNewTab = onOpenNewTab,
-                modifier = Modifier.align(Alignment.BottomCenter),
-            )
-        }
+        SafariBottomDock(
+            state = state,
+            pool = pool,
+            backdrop = pageBackdrop,
+            alphaFactorProvider = dockAlphaProvider,
+            editProgressProvider = editProgressProvider,
+            tabSwipeFractionProvider = swipeFractionProvider,
+            isDraggingToOverviewProvider = activeGestureProvider,
+            layoutProfile = layoutProfile,
+            onBarDragStart = onBarDragStart,
+            onBarDragDelta = onBarDragDelta,
+            onBarDragEnd = { vx, vy -> onBarDragEnd(vx, vy, true) },
+            onOpenOverview = onOpenOverview,
+            onOpenNewTab = onOpenNewTab,
+            modifier = Modifier.align(Alignment.BottomCenter),
+        )
     }
 }
 
 @Composable
 private fun AddressOverlayHost(
     state: TerraBrowserState,
+    layoutProfile: BrowserLayoutProfile,
     addressEditProgress: Animatable<Float, AnimationVector1D>,
 ) {
     val editP = addressEditProgress.value
@@ -1628,7 +1644,12 @@ private fun AddressOverlayHost(
         AddressEditingOverlay(
             state = state,
             progress = editP,
+            layoutProfile = layoutProfile,
             onSubmitInput = { input -> state.navigateActiveTab(input) },
+            onSelectOpenTab = { tabId ->
+                state.selectTab(tabId)
+                state.isAddressEditing = false
+            },
             onDismiss = { state.isAddressEditing = false },
         )
     }
@@ -1687,31 +1708,20 @@ private fun TerraLiquidKitRoot(
     edgeToEdgeSystemBars: Boolean = true,
     content: @Composable BoxScope.() -> Unit,
 ) {
-    LaunchedEffect(Unit) {
-        delay(350)
-        warmUpLiquidKitPipelines()
-    }
-    LiquidKitTheme(opacity = opacity, dark = dark) {
-        if (edgeToEdgeSystemBars) {
-            LiquidKitSystemBarAppearance(dark = dark, enabled = true)
-        }
-        val colors = liquidKitColors(dark)
-        val canvas = colors.background
-        val sceneBackdrop = rememberSolidColorLiquidKitBackdrop(canvas)
-        LiquidModalHost(modifier = modifier.fillMaxSize()) {
-            val modalBackdrop = localLiquidModalBackdrop() ?: sceneBackdrop
-            CompositionLocalProvider(
-                LocalLiquidKitBackdrop provides sceneBackdrop,
-                LocalLiquidKitModalBackdrop provides modalBackdrop,
-            ) {
-                LiquidKitOverscrollScope(enabled = true) {
-                    Box(
-                        Modifier
-                            .fillMaxSize()
-                            .background(canvas),
-                    ) {
-                        content()
-                    }
+    CompositionLocalProvider(
+        LocalLiquidKitSymbolRenderer provides { symbol, color, iconModifier ->
+            TerraSymbolIcon(symbol = symbol, tint = color, modifier = iconModifier)
+        },
+    ) {
+        LiquidKitRoot(
+            modifier = modifier,
+            opacity = opacity,
+            dark = dark,
+            edgeToEdgeSystemBars = edgeToEdgeSystemBars,
+        ) {
+            LiquidKitOverscrollScope(enabled = true) {
+                Box(Modifier.fillMaxSize()) {
+                    content()
                 }
             }
         }

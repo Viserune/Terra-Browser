@@ -27,9 +27,11 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import com.terra.browser.downloads.TerraDownloads
 import com.terra.browser.model.BrowserTab
 import com.terra.browser.model.BrowserUrlUtils
 import com.terra.browser.model.SiteDarkMode
+import com.terra.browser.reader.ReaderArticle
 import com.terra.browser.state.TerraBrowserState
 import java.io.ByteArrayInputStream
 import java.io.File
@@ -64,6 +66,9 @@ class TerraWebViewPool(
     private val faviconsDir = File(context.cacheDir, "tab_favicons").apply { mkdirs() }
     private val statesDir = File(context.cacheDir, "tab_states").apply { mkdirs() }
     private val maxPoolSize = 8
+
+    val downloads: TerraDownloads = TerraDownloads(context)
+    private var readerScriptCache: String? = null
 
     @Volatile
     var isTransitionActive: Boolean = false
@@ -173,6 +178,22 @@ class TerraWebViewPool(
             if (isDoneCounting) {
                 state.findMatchCount = numberOfMatches
                 state.findMatchIndex = if (numberOfMatches > 0) activeMatchOrdinal + 1 else 0
+            }
+        }
+        wv.setDownloadListener { url, userAgent, contentDisposition, mimetype, _ ->
+            val currentTab = state.tabs.firstOrNull { it.id == tab.id }
+            val isPrivate = state.tabGroups.firstOrNull { it.id == currentTab?.groupId }?.isPrivate == true
+            val filename = downloads.enqueue(
+                url = url,
+                userAgent = userAgent,
+                contentDisposition = contentDisposition,
+                mimeType = mimetype,
+                isPrivate = isPrivate,
+            )
+            if (filename != null) {
+                state.showBanner("已开始下载：$filename")
+            } else {
+                state.showBanner("无法下载此链接")
             }
         }
 
@@ -300,7 +321,11 @@ class TerraWebViewPool(
 
             override fun onPageCommitVisible(view: WebView?, url: String?) {
                 super.onPageCommitVisible(view, url)
-                (view as? TerraWebView)?.resetTopSafeOffsetIfAtTop()
+                val twv = view as? TerraWebView
+                twv?.resetTopSafeOffsetIfAtTop()
+                if (!url.isNullOrBlank()) {
+                    twv?.restoreReadingPosition(url, finished = false)
+                }
                 val latestTab = state.tabs.firstOrNull { it.id == tab.id }
                 val shouldInjectDark = latestTab?.let { resolveDarkCss(it, appDark) } ?: false
                 injectDarkModeCss(view, shouldInjectDark)
@@ -313,7 +338,9 @@ class TerraWebViewPool(
                 entry.currentLoadFinished = true
                 entry.loadedUrl = safeUrl
                 entry.lastCommittedBaseUrl = safeUrl.substringBefore('#')
-                (view as? TerraWebView)?.resetTopSafeOffsetIfAtTop()
+                val twv = view as? TerraWebView
+                twv?.resetTopSafeOffsetIfAtTop()
+                twv?.restoreReadingPosition(safeUrl, finished = true)
                 val latestTab = state.tabs.firstOrNull { it.id == tab.id }
                 val finalTitle = view?.title?.takeIf { it.isNotBlank() }
                     ?: BrowserUrlUtils.displayHost(safeUrl).ifBlank { safeUrl }
@@ -644,6 +671,7 @@ class TerraWebViewPool(
     fun captureSnapshotBeforeHide(tabId: String) {
         val entry = entries[tabId] ?: return
         val wv = entry.webView
+        wv.rememberReadingPosition(wv.url ?: entry.loadedUrl)
         if (!wv.isAttachedToWindow || wv.visibility != View.VISIBLE || wv.width <= 0 || wv.height <= 0) {
             return
         }
@@ -804,6 +832,7 @@ class TerraWebViewPool(
 
     fun saveTabState(tabId: String) {
         val entry = entries[tabId] ?: return
+        entry.webView.rememberReadingPosition(entry.webView.url ?: entry.loadedUrl)
         val bundle = Bundle()
         entry.webView.saveState(bundle) ?: return
         val bytes = runCatching {
@@ -945,6 +974,37 @@ class TerraWebViewPool(
         runCatching { entries[tabId]?.webView?.clearMatches() }
         state.findMatchCount = 0
         state.findMatchIndex = 0
+    }
+
+    fun extractReaderArticle(tabId: String, onResult: (ReaderArticle?) -> Unit) {
+        val entry = entries[tabId]
+        val tab = state.tabs.firstOrNull { it.id == tabId }
+        if (entry == null || tab == null || tab.isStartPage) {
+            onResult(null)
+            return
+        }
+        val targetUrl = tab.url
+        val fallbackTitle = tab.title.ifBlank { tab.host.ifBlank { targetUrl } }
+        val script = readerScriptCache ?: runCatching {
+            context.assets.open("reader-article.js").bufferedReader().use { it.readText() }
+        }.getOrNull()?.also { readerScriptCache = it }
+        if (script == null) {
+            onResult(null)
+            return
+        }
+        entry.webView.evaluateJavascript(script) { rawJson ->
+            runIo {
+                val parsed = ReaderArticle.parse(rawJson, fallbackTitle)
+                mainHandler.post {
+                    val latestTab = state.tabs.firstOrNull { it.id == tabId }
+                    if (latestTab?.url == targetUrl) {
+                        onResult(parsed)
+                    } else {
+                        onResult(null)
+                    }
+                }
+            }
+        }
     }
 
     fun evictTab(tabId: String) {

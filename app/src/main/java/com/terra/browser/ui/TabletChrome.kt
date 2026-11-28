@@ -79,8 +79,10 @@ import io.liquidkit.LiquidKitSpring
 import io.liquidkit.LiquidKitSymbol
 import io.liquidkit.liquidKitAppearance
 import io.liquidkit.liquidKitColors
+import io.liquidkit.liquidKitPopoverAnchor
 import io.liquidkit.rememberLiquidKitHaptics
 import io.liquidkit.rememberLiquidKitMenuState
+import io.liquidkit.rememberLiquidKitPopoverAnchorState
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
@@ -267,29 +269,6 @@ fun TabletTopChrome(
         }
     }
 
-    val allTabletMenus = remember(
-        pageMenuState,
-        addressLongPressMenuState,
-        backHistoryMenuState,
-        forwardHistoryMenuState,
-        shareQuickMenuState,
-        newTabQuickMenuState,
-        quickTabsMenuState,
-    ) {
-        listOf(
-            pageMenuState,
-            addressLongPressMenuState,
-            backHistoryMenuState,
-            forwardHistoryMenuState,
-            shareQuickMenuState,
-            newTabQuickMenuState,
-            quickTabsMenuState,
-        )
-    }
-    val openMenuExclusively: (io.liquidkit.LiquidKitMenuState) -> Unit = remember(allTabletMenus) {
-        { target -> showMenuExclusively(target, allTabletMenus) }
-    }
-
     val collapseState = animateFloatAsState(
         targetValue = if (state.isToolbarMinimized) 1f else 0f,
         animationSpec = LiquidKitSpring.swiftUI(0.32f, 0.86f).spec,
@@ -354,7 +333,7 @@ fun TabletTopChrome(
                 val pillFullPx = with(density) { 40.dp.toPx() }
                 val pillMiniPx = with(density) { 32.dp.toPx() }
                 val gap12Px = with(density) { 12.dp.toPx() }
-                val tabletPillBoundsRef = remember { arrayOfNulls<Rect>(1) }
+                val tabletPillAnchor = rememberLiquidKitPopoverAnchorState()
 
                 BoxWithConstraints(
                     modifier = Modifier
@@ -448,7 +427,6 @@ fun TabletTopChrome(
                             buttonWidth = 36.dp,
                             buttonHeight = 36.dp,
                             enabled = sideInteractive && tab.canGoBack,
-                            onBeforeOpenMenu = { openMenuExclusively(backHistoryMenuState) },
                             onShortTap = {
                                 if (tab.canGoBack) pool.goBack(tab.id)
                             },
@@ -467,7 +445,6 @@ fun TabletTopChrome(
                             buttonWidth = 36.dp,
                             buttonHeight = 36.dp,
                             enabled = sideInteractive && tab.canGoForward,
-                            onBeforeOpenMenu = { openMenuExclusively(forwardHistoryMenuState) },
                             onShortTap = {
                                 if (tab.canGoForward) pool.goForward(tab.id)
                             },
@@ -490,13 +467,13 @@ fun TabletTopChrome(
                                 val placeable = measurable.measure(Constraints.fixed(wPx, hPx))
                                 layout(wPx, hPx) { placeable.placeRelative(0, 0) }
                             }
-                            .onGloballyPositioned { if (it.isAttached) tabletPillBoundsRef[0] = it.boundsInRoot() },
+                            .liquidKitPopoverAnchor(tabletPillAnchor),
                     ) {
                         AnchoredGlassMenuOverlay(
                             menuState = addressLongPressMenuState,
                             items = addressLongPressItems,
                             backdrop = backdrop,
-                            anchorBoundsProvider = { tabletPillBoundsRef[0] },
+                            anchorBoundsProvider = { tabletPillAnchor.boundsInRoot },
                             ink = colors.ink,
                             isDark = isDark,
                             centerHorizontally = true,
@@ -545,7 +522,6 @@ fun TabletTopChrome(
                                     swipeTxPx = 0f,
                                     collapseProvider = { collapseState.value },
                                     swipeTxPxProvider = swipeTxProvider,
-                                    onBeforeOpenMenu = openMenuExclusively,
                                     modifier = Modifier.fillMaxSize(),
                                 )
 
@@ -601,7 +577,6 @@ fun TabletTopChrome(
                             buttonWidth = 38.dp,
                             buttonHeight = 36.dp,
                             enabled = sideInteractive,
-                            onBeforeOpenMenu = { openMenuExclusively(shareQuickMenuState) },
                             onShortTap = { state.showShareSheet = true },
                         ) {
                             TerraSymbolIcon(symbol = LiquidKitSymbol.Share, tint = colors.ink, modifier = Modifier.size(19.dp))
@@ -614,7 +589,6 @@ fun TabletTopChrome(
                             buttonWidth = 38.dp,
                             buttonHeight = 36.dp,
                             enabled = sideInteractive,
-                            onBeforeOpenMenu = { openMenuExclusively(newTabQuickMenuState) },
                             onShortTap = onOpenNewTab,
                         ) {
                             TerraSymbolIcon(symbol = LiquidKitSymbol.Add, tint = colors.ink, modifier = Modifier.size(20.dp))
@@ -627,7 +601,6 @@ fun TabletTopChrome(
                             buttonWidth = 38.dp,
                             buttonHeight = 36.dp,
                             enabled = sideInteractive,
-                            onBeforeOpenMenu = { openMenuExclusively(quickTabsMenuState) },
                             onShortTap = onOpenOverview,
                         ) {
                             SafariTabsIcon(color = colors.ink, modifier = Modifier.size(19.dp))
@@ -648,7 +621,6 @@ fun TabletTopChrome(
                         secondary = colors.secondary,
                         accentBlue = accentBlue,
                         isDark = isDark,
-                        onBeforeOpenMenu = { openMenuExclusively(it) },
                     )
                 }
 
@@ -680,7 +652,8 @@ private fun TabletTabStrip(
     val triggerHaptic = rememberLiquidKitHaptics()
     val listState = rememberLazyListState()
     var ctxTab by remember { mutableStateOf<BrowserTab?>(null) }
-    var ctxAnchorBounds by remember { mutableStateOf<Rect?>(null) }
+    val ctxAnchor = rememberLiquidKitPopoverAnchorState()
+    val stripBoundsMap = remember { HashMap<String, Rect>() }
 
     LaunchedEffect(activeTabId, groupTabs.size) {
         val activeIndex = groupTabs.indexOfFirst { it.id == activeTabId }
@@ -746,7 +719,7 @@ private fun TabletTabStrip(
         menuState = stripCtxMenuState,
         items = stripCtxItems,
         backdrop = backdrop,
-        anchorBoundsProvider = { ctxAnchorBounds },
+        anchorBoundsProvider = { ctxAnchor.boundsInRoot },
         ink = ink,
         isDark = isDark,
     ) {
@@ -774,8 +747,6 @@ private fun TabletTabStrip(
                     isDark -> Color.White.copy(alpha = 0.06f)
                     else -> Color.Black.copy(alpha = 0.06f)
                 }
-                var myBounds by remember { mutableStateOf<Rect?>(null) }
-
                 Row(
                     modifier = Modifier
                         .height(31.dp)
@@ -783,14 +754,14 @@ private fun TabletTabStrip(
                         .clip(chipShape)
                         .background(chipBg)
                         .border(0.75.dp, chipBorder, chipShape)
-                        .onGloballyPositioned { if (it.isAttached) myBounds = it.boundsInRoot() }
+                        .onGloballyPositioned { if (it.isAttached) stripBoundsMap[stripTab.id] = it.boundsInRoot() }
                         .pointerInput(stripTab.id) {
                             detectTapGestures(
                                 onTap = { state.selectTab(stripTab.id) },
                                 onLongPress = {
                                     triggerHaptic(LiquidKitHaptic.LongPressLift)
                                     ctxTab = stripTab
-                                    ctxAnchorBounds = myBounds
+                                    ctxAnchor.boundsInRoot = stripBoundsMap[stripTab.id]
                                     onBeforeOpenMenu(stripCtxMenuState)
                                     stripCtxMenuState.show()
                                 },
@@ -875,6 +846,7 @@ private fun TabletTabStrip(
 @Composable
 fun TabletSidebar(
     state: TerraBrowserState,
+    pool: TerraWebViewPool,
     onCloseSidebar: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -941,6 +913,11 @@ fun TabletSidebar(
                         SafariSidebarIcon(color = colors.secondary, modifier = Modifier.size(18.dp))
                     }
                 }
+            }
+
+            val isPrivateGroup = state.activeGroup.isPrivate
+            val sidebarDownloads = remember(isPrivateGroup, pool.downloads.revision, selectedLibrary) {
+                if (selectedLibrary == LibraryTab.DOWNLOADS) pool.downloads.read(isPrivateGroup).take(16) else emptyList()
             }
 
             LazyColumn(
@@ -1077,6 +1054,24 @@ fun TabletSidebar(
                                 secondary = colors.secondary,
                                 cardFill = cardFill,
                             ) { state.navigateActiveTab(his.url) }
+                        }
+                    }
+                    LibraryTab.DOWNLOADS -> {
+                        items(sidebarDownloads, key = { "sb_dl_${it.id}" }) { dl ->
+                            SidebarUrlRow(
+                                title = dl.title.ifBlank { BrowserUrlUtils.displayHost(dl.url) },
+                                host = when {
+                                    dl.completed -> "已完成"
+                                    dl.failed -> "下载失败"
+                                    else -> "下载中…"
+                                },
+                                accentArgb = if (dl.failed) 0xFFFF3B30 else BrowserUrlUtils.accentColorForUrl(dl.url),
+                                ink = colors.ink,
+                                secondary = colors.secondary,
+                                cardFill = cardFill,
+                            ) {
+                                if (dl.completed) pool.downloads.open(dl) else pool.downloads.openDirectory()
+                            }
                         }
                     }
                 }
