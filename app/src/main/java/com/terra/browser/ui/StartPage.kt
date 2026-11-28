@@ -344,29 +344,69 @@ fun StartPage(
                     onAction = { state.showAllFavorites = !state.showAllFavorites },
                 )
 
-                val rows = visibleFavorites.chunked(favCols)
-                Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                    rows.forEach { rowItems ->
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                if (visibleFavorites.isEmpty()) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(StartPageCardShape)
+                            .background(cardBg)
+                            .border(0.75.dp, cardBorder, StartPageCardShape)
+                            .padding(horizontal = 16.dp, vertical = 14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(38.dp)
+                                .clip(RoundedCornerShape(11.dp))
+                                .background(accentBlue.copy(alpha = 0.14f)),
+                            contentAlignment = Alignment.Center,
                         ) {
-                            rowItems.forEach { fav ->
-                                Box(
-                                    modifier = Modifier.weight(1f),
-                                    contentAlignment = Alignment.TopCenter,
-                                ) {
-                                    FavoriteTile(
-                                        item = fav,
-                                        primaryInk = primaryInk,
-                                        menuState = contextMenuState,
-                                        onPrepareContext = { contextTarget = StartPageContextTarget.Favorite(fav) },
-                                        onTap = { onOpenUrl(fav.url) },
-                                    )
+                            TerraSymbolIcon(
+                                symbol = LiquidKitSymbol.Star,
+                                tint = accentBlue,
+                                modifier = Modifier.size(18.dp),
+                            )
+                        }
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(2.dp),
+                        ) {
+                            BasicText(
+                                text = "暂无个人收藏",
+                                style = TextStyle(color = primaryInk, fontSize = 14.sp, fontWeight = FontWeight.SemiBold),
+                            )
+                            BasicText(
+                                text = "浏览网页时点击分享或页面菜单可添加至此",
+                                style = TextStyle(color = secondaryInk, fontSize = 12.sp),
+                            )
+                        }
+                    }
+                } else {
+                    val rows = visibleFavorites.chunked(favCols)
+                    Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                        rows.forEach { rowItems ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            ) {
+                                rowItems.forEach { fav ->
+                                    Box(
+                                        modifier = Modifier.weight(1f),
+                                        contentAlignment = Alignment.TopCenter,
+                                    ) {
+                                        FavoriteTile(
+                                            item = fav,
+                                            primaryInk = primaryInk,
+                                            menuState = contextMenuState,
+                                            onPrepareContext = { contextTarget = StartPageContextTarget.Favorite(fav) },
+                                            onTap = { onOpenUrl(fav.url) },
+                                        )
+                                    }
                                 }
-                            }
-                            repeat(favCols - rowItems.size) {
-                                Spacer(Modifier.weight(1f))
+                                repeat(favCols - rowItems.size) {
+                                    Spacer(Modifier.weight(1f))
+                                }
                             }
                         }
                     }

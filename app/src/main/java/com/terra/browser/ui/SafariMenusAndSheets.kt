@@ -116,7 +116,7 @@ fun SafariModalsHost(
             colors = colors,
         ) {
             // Recently saved horizontal cards
-            if (state.bookmarks.isNotEmpty() || state.readingList.isNotEmpty()) {
+            if (state.bookmarks.isNotEmpty()) {
                 BasicText(
                     text = "最近保存",
                     style = TextStyle(color = colors.ink, fontSize = 15.sp, fontWeight = FontWeight.SemiBold),
@@ -706,17 +706,70 @@ fun SafariModalsHost(
                         text = "默认搜索引擎",
                         style = TextStyle(color = colors.secondary, fontSize = 12.sp, fontWeight = FontWeight.Medium),
                     )
-                    LiquidKitSegmentedPicker(
-                        options = SearchEngine.entries.map { it.label },
-                        selected = state.searchEngine.label,
-                        select = { picked ->
-                            state.searchEngine = SearchEngine.entries.firstOrNull { it.label == picked } ?: state.searchEngine
-                            state.persist()
-                        },
-                        colors = colors,
-                        backdrop = sheetSolidBackdrop,
+                    LazyRow(
                         modifier = Modifier.fillMaxWidth(),
-                    )
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        items(state.allSearchEngines, key = { it.id }) { engine ->
+                            val selected = state.searchEngine.id == engine.id
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(99.dp))
+                                    .background(
+                                        if (selected) accentBlue.copy(alpha = 0.16f)
+                                        else if (isDark) Color.White.copy(alpha = 0.08f)
+                                        else Color.Black.copy(alpha = 0.06f),
+                                    )
+                                    .border(
+                                        0.75.dp,
+                                        if (selected) accentBlue.copy(alpha = 0.65f) else Color.Transparent,
+                                        RoundedCornerShape(99.dp),
+                                    )
+                                    .clickable(
+                                        interactionSource = remember { MutableInteractionSource() },
+                                        indication = null,
+                                    ) { state.selectSearchEngine(engine) }
+                                    .padding(horizontal = 12.dp, vertical = 7.dp),
+                            ) {
+                                BasicText(
+                                    text = engine.label,
+                                    maxLines = 1,
+                                    style = TextStyle(
+                                        color = if (selected) accentBlue else colors.ink,
+                                        fontSize = 13.sp,
+                                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+                                    ),
+                                )
+                            }
+                        }
+                        item("zoom_custom_engine") {
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(99.dp))
+                                    .background(
+                                        if (isDark) Color.White.copy(alpha = 0.08f) else Color.Black.copy(alpha = 0.06f),
+                                    )
+                                    .clickable(
+                                        interactionSource = remember { MutableInteractionSource() },
+                                        indication = null,
+                                    ) {
+                                        state.showZoomSheet = false
+                                        state.showSettingsSheet = true
+                                    }
+                                    .padding(horizontal = 12.dp, vertical = 7.dp),
+                            ) {
+                                BasicText(
+                                    text = "+ 自定义",
+                                    maxLines = 1,
+                                    style = TextStyle(
+                                        color = accentBlue,
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.Medium,
+                                    ),
+                                )
+                            }
+                        }
+                    }
                 }
             }
         }

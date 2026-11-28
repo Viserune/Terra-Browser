@@ -46,6 +46,7 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.CornerSize
@@ -3175,6 +3176,49 @@ fun AddressEditingOverlay(
                         contentPadding = PaddingValues(14.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
+                        item("tablet_search_engines") {
+                            LazyRow(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(bottom = 4.dp),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                items(state.allSearchEngines, key = { it.id }) { engine ->
+                                    val selected = state.searchEngine.id == engine.id
+                                    Box(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(99.dp))
+                                            .background(
+                                                if (selected) accentBlue.copy(alpha = 0.18f)
+                                                else if (isDark) Color.White.copy(alpha = 0.08f)
+                                                else Color.Black.copy(alpha = 0.06f),
+                                            )
+                                            .border(
+                                                0.75.dp,
+                                                if (selected) accentBlue.copy(alpha = 0.6f) else Color.Transparent,
+                                                RoundedCornerShape(99.dp),
+                                            )
+                                            .clickable(
+                                                interactionSource = remember { MutableInteractionSource() },
+                                                indication = null,
+                                                enabled = isEditing,
+                                            ) {
+                                                state.selectSearchEngine(engine)
+                                            }
+                                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                                    ) {
+                                        BasicText(
+                                            text = engine.label,
+                                            style = TextStyle(
+                                                color = if (selected) accentBlue else colors.secondary,
+                                                fontSize = 12.sp,
+                                                fontWeight = FontWeight.SemiBold,
+                                            ),
+                                        )
+                                    }
+                                }
+                            }
+                        }
                         if (query.isEmpty()) {
                             if (state.favorites.isNotEmpty()) {
                                 item("tab_fav_hdr") {
@@ -3305,14 +3349,14 @@ fun AddressEditingOverlay(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 item("search_engines") {
-                    Row(
+                    LazyRow(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(bottom = 6.dp),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        SearchEngine.entries.forEach { engine ->
-                            val selected = state.searchEngine == engine
+                        items(state.allSearchEngines, key = { it.id }) { engine ->
+                            val selected = state.searchEngine.id == engine.id
                             Box(
                                 modifier = Modifier
                                     .clip(RoundedCornerShape(99.dp))
@@ -3331,8 +3375,7 @@ fun AddressEditingOverlay(
                                         indication = null,
                                         enabled = isEditing,
                                     ) {
-                                        state.searchEngine = engine
-                                        state.persist()
+                                        state.selectSearchEngine(engine)
                                     }
                                     .padding(horizontal = 12.dp, vertical = 6.dp),
                             ) {
@@ -3350,7 +3393,7 @@ fun AddressEditingOverlay(
                 }
 
                 if (query.isEmpty()) {
-                    if (state.showRecentSearches) {
+                    if (state.showRecentSearches && state.recentSearches.isNotEmpty()) {
                         item("recent_header") {
                             Row(
                                 modifier = Modifier

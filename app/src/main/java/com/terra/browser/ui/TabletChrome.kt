@@ -1021,39 +1021,69 @@ fun TabletSidebar(
 
                 when (selectedLibrary) {
                     LibraryTab.BOOKMARKS -> {
-                        items(state.bookmarks, key = { "sb_bm_${it.id}" }) { bm ->
-                            SidebarUrlRow(
-                                title = bm.title,
-                                host = BrowserUrlUtils.displayHost(bm.url),
-                                accentArgb = BrowserUrlUtils.accentColorForUrl(bm.url),
-                                ink = colors.ink,
-                                secondary = colors.secondary,
-                                cardFill = cardFill,
-                            ) { state.navigateActiveTab(bm.url) }
+                        if (state.bookmarks.isEmpty()) {
+                            item("sb_bm_empty") {
+                                BasicText(
+                                    text = "暂无书签",
+                                    style = TextStyle(color = colors.secondary, fontSize = 12.sp),
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 10.dp),
+                                )
+                            }
+                        } else {
+                            items(state.bookmarks, key = { "sb_bm_${it.id}" }) { bm ->
+                                SidebarUrlRow(
+                                    title = bm.title,
+                                    host = BrowserUrlUtils.displayHost(bm.url),
+                                    accentArgb = BrowserUrlUtils.accentColorForUrl(bm.url),
+                                    ink = colors.ink,
+                                    secondary = colors.secondary,
+                                    cardFill = cardFill,
+                                ) { state.navigateActiveTab(bm.url) }
+                            }
                         }
                     }
                     LibraryTab.READING_LIST -> {
-                        items(state.readingList, key = { "sb_rl_${it.id}" }) { rl ->
-                            SidebarUrlRow(
-                                title = rl.title,
-                                host = BrowserUrlUtils.displayHost(rl.url),
-                                accentArgb = BrowserUrlUtils.accentColorForUrl(rl.url),
-                                ink = colors.ink,
-                                secondary = colors.secondary,
-                                cardFill = cardFill,
-                            ) { state.navigateActiveTab(rl.url) }
+                        if (state.readingList.isEmpty()) {
+                            item("sb_rl_empty") {
+                                BasicText(
+                                    text = "暂无阅读列表",
+                                    style = TextStyle(color = colors.secondary, fontSize = 12.sp),
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 10.dp),
+                                )
+                            }
+                        } else {
+                            items(state.readingList, key = { "sb_rl_${it.id}" }) { rl ->
+                                SidebarUrlRow(
+                                    title = rl.title,
+                                    host = BrowserUrlUtils.displayHost(rl.url),
+                                    accentArgb = BrowserUrlUtils.accentColorForUrl(rl.url),
+                                    ink = colors.ink,
+                                    secondary = colors.secondary,
+                                    cardFill = cardFill,
+                                ) { state.navigateActiveTab(rl.url) }
+                            }
                         }
                     }
                     LibraryTab.HISTORY -> {
-                        items(state.history.take(16), key = { "sb_his_${it.id}" }) { his ->
-                            SidebarUrlRow(
-                                title = his.title,
-                                host = BrowserUrlUtils.displayHost(his.url),
-                                accentArgb = BrowserUrlUtils.accentColorForUrl(his.url),
-                                ink = colors.ink,
-                                secondary = colors.secondary,
-                                cardFill = cardFill,
-                            ) { state.navigateActiveTab(his.url) }
+                        if (state.history.isEmpty()) {
+                            item("sb_his_empty") {
+                                BasicText(
+                                    text = "暂无历史记录",
+                                    style = TextStyle(color = colors.secondary, fontSize = 12.sp),
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 10.dp),
+                                )
+                            }
+                        } else {
+                            items(state.history.take(16), key = { "sb_his_${it.id}" }) { his ->
+                                SidebarUrlRow(
+                                    title = his.title,
+                                    host = BrowserUrlUtils.displayHost(his.url),
+                                    accentArgb = BrowserUrlUtils.accentColorForUrl(his.url),
+                                    ink = colors.ink,
+                                    secondary = colors.secondary,
+                                    cardFill = cardFill,
+                                ) { state.navigateActiveTab(his.url) }
+                            }
                         }
                     }
                     LibraryTab.DOWNLOADS -> {

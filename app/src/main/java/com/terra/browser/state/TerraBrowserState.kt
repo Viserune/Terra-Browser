@@ -49,6 +49,7 @@ class TerraBrowserState(
     val history = mutableStateListOf<HistoryEntry>()
     val recentSearches = mutableStateListOf<String>()
     val pageMenuItems = mutableStateListOf<PageMenuItemConfig>()
+    val customSearchEngines = mutableStateListOf<SearchEngine>()
 
     val activeTabIdByGroup = mutableStateMapOf<String, String>()
     val thumbnails = mutableStateMapOf<String, ImageBitmap>()
@@ -57,6 +58,8 @@ class TerraBrowserState(
 
     var activeGroupId by mutableStateOf("main")
     var searchEngine by mutableStateOf(SearchEngine.BING)
+    val allSearchEngines: List<SearchEngine>
+        get() = SearchEngine.builtIn + customSearchEngines
     var isOverviewOpen by mutableStateOf(false)
     var isAddressEditing by mutableStateOf(false)
     var addressDraft by mutableStateOf("")
@@ -74,7 +77,7 @@ class TerraBrowserState(
 
     var glassOpacity by mutableFloatStateOf(0.72f)
     var darkModePreference by mutableStateOf(DarkModePreference.SYSTEM)
-    var totalTrackersBlocked by mutableIntStateOf(32)
+    var totalTrackersBlocked by mutableIntStateOf(0)
 
     var tabBarMode by mutableStateOf(TabBarMode.BOTTOM)
     var extendWebsiteTint by mutableStateOf(true)
@@ -128,9 +131,11 @@ class TerraBrowserState(
         val snapshotHistory = history.take(50)
         val snapshotSearches = recentSearches.toList()
         val snapshotMenuItems = pageMenuItems.toList()
+        val snapshotCustomEngines = customSearchEngines.toList()
         val root = JSONObject()
         root.put("activeGroupId", activeGroupId)
-        root.put("searchEngine", searchEngine.name)
+        root.put("searchEngineId", searchEngine.id)
+        root.put("searchEngine", searchEngine.id)
         root.put("glassOpacity", glassOpacity.toDouble())
         root.put("darkModePreference", darkModePreference.name)
         root.put("totalTrackersBlocked", totalTrackersBlocked)
@@ -239,6 +244,15 @@ class TerraBrowserState(
                     put("id", cfg.id)
                     put("enabled", cfg.enabled)
                     put("order", idx)
+                })
+            }
+        })
+        root.put("customSearchEngines", JSONArray().apply {
+            snapshotCustomEngines.forEach { engine ->
+                put(JSONObject().apply {
+                    put("id", engine.id)
+                    put("label", engine.label)
+                    put("queryTemplate", engine.queryTemplate)
                 })
             }
         })
@@ -790,6 +804,37 @@ class TerraBrowserState(
         persist()
     }
 
+    fun selectSearchEngine(engine: SearchEngine) {
+        searchEngine = engine
+        persist()
+    }
+
+    fun addCustomSearchEngine(name: String, template: String, select: Boolean = true): SearchEngine? {
+        val cleanName = name.trim()
+        if (cleanName.isEmpty() || !BrowserUrlUtils.isValidSearchEngineTemplate(template)) return null
+        val normalizedTemplate = BrowserUrlUtils.normalizeSearchTemplate(template)
+        val created = SearchEngine(
+            id = "custom_${UUID.randomUUID().toString().take(8)}",
+            label = cleanName,
+            queryTemplate = normalizedTemplate,
+            isCustom = true,
+        )
+        customSearchEngines.add(created)
+        if (select) {
+            searchEngine = created
+        }
+        persist()
+        return created
+    }
+
+    fun removeCustomSearchEngine(id: String) {
+        customSearchEngines.removeAll { it.id == id }
+        if (searchEngine.id == id) {
+            searchEngine = SearchEngine.BING
+        }
+        persist()
+    }
+
     fun showBanner(message: String) {
         statusBannerMessage = message
     }
@@ -822,8 +867,6 @@ class TerraBrowserState(
             listOf(
                 TabGroup(id = "private", name = "无痕浏览", isPrivate = true, isDefault = false, accentColorArgb = 0xFF636366),
                 TabGroup(id = "main", name = "标签页", isPrivate = false, isDefault = true, accentColorArgb = 0xFF0A84FF),
-                TabGroup(id = "dev", name = "dev", isPrivate = false, isDefault = false, accentColorArgb = 0xFF30D158),
-                TabGroup(id = "ai", name = "AI Tools", isPrivate = false, isDefault = false, accentColorArgb = 0xFFBF5AF2),
             ),
         )
 
@@ -839,38 +882,6 @@ class TerraBrowserState(
                     accentColorArgb = 0xFF636366,
                 ),
                 BrowserTab(
-                    id = "tab_main_1",
-                    groupId = "main",
-                    url = "https://www.apple.com",
-                    title = "Apple",
-                    host = "apple.com",
-                    accentColorArgb = 0xFF1C1C1E,
-                ),
-                BrowserTab(
-                    id = "tab_main_2",
-                    groupId = "main",
-                    url = "https://www.huawei.com",
-                    title = "管理层信息 - 关于华为",
-                    host = "huawei.com",
-                    accentColorArgb = 0xFFC7000B,
-                ),
-                BrowserTab(
-                    id = "tab_main_3",
-                    groupId = "main",
-                    url = "https://www.wikipedia.org",
-                    title = "Wikipedia",
-                    host = "wikipedia.org",
-                    accentColorArgb = 0xFF3366CC,
-                ),
-                BrowserTab(
-                    id = "tab_main_4",
-                    groupId = "main",
-                    url = "https://www.bing.com",
-                    title = "必应",
-                    host = "bing.com",
-                    accentColorArgb = 0xFF00809D,
-                ),
-                BrowserTab(
                     id = "tab_main_start",
                     groupId = "main",
                     url = "",
@@ -878,101 +889,21 @@ class TerraBrowserState(
                     host = "",
                     accentColorArgb = 0xFF0A84FF,
                 ),
-                BrowserTab(
-                    id = "tab_dev_1",
-                    groupId = "dev",
-                    url = "https://github.com",
-                    title = "GitHub",
-                    host = "github.com",
-                    accentColorArgb = 0xFF24292F,
-                ),
-                BrowserTab(
-                    id = "tab_dev_2",
-                    groupId = "dev",
-                    url = "https://developer.android.com",
-                    title = "Android Developers",
-                    host = "developer.android.com",
-                    accentColorArgb = 0xFF3DDC84,
-                ),
-                BrowserTab(
-                    id = "tab_ai_1",
-                    groupId = "ai",
-                    url = "https://platform.deepseek.com",
-                    title = "DeepSeek 开放平台",
-                    host = "platform.deepseek.com",
-                    accentColorArgb = 0xFF4D6BFE,
-                ),
             ),
         )
         activeGroupId = "main"
+        activeTabIdByGroup.clear()
         activeTabIdByGroup["main"] = "tab_main_start"
         activeTabIdByGroup["private"] = "tab_private_1"
-        activeTabIdByGroup["dev"] = "tab_dev_1"
-        activeTabIdByGroup["ai"] = "tab_ai_1"
 
         favorites.clear()
-        favorites.addAll(
-            listOf(
-                FavoriteItem("fav_apple", "Apple", "https://www.apple.com", "A", 0xFF1C1C1E),
-                FavoriteItem("fav_icloud", "iCloud", "https://www.icloud.com", "☁", 0xFF2E9AFE),
-                FavoriteItem("fav_baidu", "百度", "https://www.baidu.com", "度", 0xFF2932E1),
-                FavoriteItem("fav_bing", "Bing", "https://www.bing.com", "b", 0xFF00809D),
-                FavoriteItem("fav_wiki", "Wikipedia", "https://www.wikipedia.org", "W", 0xFF5856D6),
-                FavoriteItem("fav_github", "GitHub", "https://github.com", "GH", 0xFF24292F),
-                FavoriteItem("fav_android", "Android", "https://developer.android.com", "AD", 0xFF34C759),
-                FavoriteItem("fav_huawei", "华为", "https://www.huawei.com", "华", 0xFFC7000B),
-                FavoriteItem("fav_deepseek", "DeepSeek", "https://platform.deepseek.com", "DS", 0xFF4D6BFE),
-                FavoriteItem("fav_kotlin", "Kotlin", "https://kotlinlang.org", "K", 0xFF7F52FF),
-            ),
-        )
-
         bookmarks.clear()
-        bookmarks.addAll(
-            listOf(
-                BookmarkItem("bm_1", "Apple (中国大陆)", "https://www.apple.com.cn", "个人收藏"),
-                BookmarkItem("bm_2", "GitHub — LiquidKit", "https://github.com/egysoloman/LiquidKit", "开发"),
-                BookmarkItem("bm_3", "Android Developers", "https://developer.android.com", "开发"),
-                BookmarkItem("bm_4", "Wikipedia", "https://www.wikipedia.org", "个人收藏"),
-            ),
-        )
-
         readingList.clear()
-        readingList.addAll(
-            listOf(
-                ReadingListItem(
-                    id = "rl_1",
-                    title = "Apple Liquid Glass Design Language",
-                    url = "https://developer.apple.com/design/",
-                    excerpt = "光学折射材质、连续圆角与层级浮层交互规范。",
-                ),
-                ReadingListItem(
-                    id = "rl_2",
-                    title = "Jetpack Compose Shared Elements & Physics",
-                    url = "https://developer.android.com/develop/ui/compose/animation/shared-elements",
-                    excerpt = "构建 120Hz 共享元素缩放与弹性手势过渡。",
-                ),
-            ),
-        )
-
         history.clear()
-        history.addAll(
-            listOf(
-                HistoryEntry("his_1", "管理层信息 - 关于华为", "https://www.huawei.com"),
-                HistoryEntry("his_2", "DeepSeek 开放平台", "https://platform.deepseek.com"),
-                HistoryEntry("his_3", "GitHub", "https://github.com"),
-            ),
-        )
-
         recentSearches.clear()
-        recentSearches.addAll(
-            listOf("LiquidKit", "Android Compose", "huawei.com", "DeepSeek API"),
-        )
-
         blockedDomainCounts.clear()
-        blockedDomainCounts["doubleclick.net"] = 14
-        blockedDomainCounts["google-analytics.com"] = 11
-        blockedDomainCounts["hm.baidu.com"] = 7
-        totalTrackersBlocked = 32
+        customSearchEngines.clear()
+        totalTrackersBlocked = 0
 
         pageMenuItems.clear()
         pageMenuItems.addAll(
@@ -1009,12 +940,53 @@ class TerraBrowserState(
     }
 
     private fun restore(): Boolean {
-        val raw = prefs?.getString(PREF_KEY, null) ?: return false
+        val raw = prefs?.getString(PREF_KEY, null)
+        if (raw == null) {
+            val legacyRaw = prefs?.getString(LEGACY_PREF_KEY, null) ?: return false
+            return runCatching {
+                seedDefaults()
+                val legacyRoot = JSONObject(legacyRaw)
+                searchEngine = SearchEngine.findById(legacyRoot.optString("searchEngine")) ?: searchEngine
+                glassOpacity = legacyRoot.optDouble("glassOpacity", glassOpacity.toDouble()).toFloat().coerceIn(0.1f, 1f)
+                darkModePreference = DarkModePreference.entries.firstOrNull { it.name == legacyRoot.optString("darkModePreference") } ?: darkModePreference
+                tabBarMode = TabBarMode.entries.firstOrNull { it.name == legacyRoot.optString("tabBarMode") } ?: tabBarMode
+                extendWebsiteTint = legacyRoot.optBoolean("extendWebsiteTint", extendWebsiteTint)
+                showRecentSearches = legacyRoot.optBoolean("showRecentSearches", showRecentSearches)
+                blockPopups = legacyRoot.optBoolean("blockPopups", blockPopups)
+                preventCrossSiteTracking = legacyRoot.optBoolean("preventCrossSiteTracking", preventCrossSiteTracking)
+                warnInsecureConnection = legacyRoot.optBoolean("warnInsecureConnection", warnInsecureConnection)
+                openLinkMode = OpenLinkMode.entries.firstOrNull { it.name == legacyRoot.optString("openLinkMode") } ?: openLinkMode
+                autoCloseTabsMode = AutoCloseTabsMode.entries.firstOrNull { it.name == legacyRoot.optString("autoCloseTabsMode") } ?: autoCloseTabsMode
+                showTabletTabBar = legacyRoot.optBoolean("showTabletTabBar", true)
+                persist()
+                true
+            }.getOrDefault(false)
+        }
         return runCatching {
             seedDefaults()
             val root = JSONObject(raw)
+            customSearchEngines.clear()
+            root.optJSONArray("customSearchEngines")?.let { arr ->
+                for (i in 0 until arr.length()) {
+                    val o = arr.optJSONObject(i) ?: continue
+                    val id = o.optString("id", "").trim()
+                    val label = o.optString("label", "").trim()
+                    val tpl = o.optString("queryTemplate", "").trim()
+                    if (id.isNotEmpty() && label.isNotEmpty() && tpl.isNotEmpty()) {
+                        customSearchEngines.add(
+                            SearchEngine(
+                                id = id,
+                                label = label,
+                                queryTemplate = tpl,
+                                isCustom = true,
+                            ),
+                        )
+                    }
+                }
+            }
             activeGroupId = root.optString("activeGroupId", activeGroupId)
-            searchEngine = SearchEngine.entries.firstOrNull { it.name == root.optString("searchEngine") } ?: searchEngine
+            val savedEngineId = root.optString("searchEngineId", "").ifBlank { root.optString("searchEngine", "") }
+            searchEngine = SearchEngine.findById(savedEngineId, customSearchEngines) ?: searchEngine
             glassOpacity = root.optDouble("glassOpacity", glassOpacity.toDouble()).toFloat().coerceIn(0.1f, 1f)
             darkModePreference = DarkModePreference.entries.firstOrNull { it.name == root.optString("darkModePreference") } ?: darkModePreference
             totalTrackersBlocked = root.optInt("totalTrackersBlocked", totalTrackersBlocked)
@@ -1086,20 +1058,18 @@ class TerraBrowserState(
             }
 
             root.optJSONArray("favorites")?.let { arr ->
-                if (arr.length() > 0) {
-                    favorites.clear()
-                    for (i in 0 until arr.length()) {
-                        val o = arr.getJSONObject(i)
-                        favorites.add(
-                            FavoriteItem(
-                                id = o.getString("id"),
-                                title = o.getString("title"),
-                                url = o.getString("url"),
-                                shortGlyph = o.optString("shortGlyph", "W"),
-                                colorArgb = o.optLong("colorArgb", 0xFF0A84FF),
-                            ),
-                        )
-                    }
+                favorites.clear()
+                for (i in 0 until arr.length()) {
+                    val o = arr.getJSONObject(i)
+                    favorites.add(
+                        FavoriteItem(
+                            id = o.getString("id"),
+                            title = o.getString("title"),
+                            url = o.getString("url"),
+                            shortGlyph = o.optString("shortGlyph", "W"),
+                            colorArgb = o.optLong("colorArgb", 0xFF0A84FF),
+                        ),
+                    )
                 }
             }
 
@@ -1192,6 +1162,7 @@ class TerraBrowserState(
     }
 
     companion object {
-        private const val PREF_KEY = "terra_browser_state_v1"
+        private const val LEGACY_PREF_KEY = "terra_browser_state_v1"
+        private const val PREF_KEY = "terra_browser_state_v2"
     }
 }

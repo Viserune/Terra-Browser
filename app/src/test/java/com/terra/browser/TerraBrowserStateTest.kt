@@ -39,13 +39,14 @@ class TerraBrowserStateTest {
     @Test
     fun closingLastTabCreatesFreshStartPageAndAdjacentSwipeSpawnsNewTab() {
         val state = TerraBrowserState(prefs = null)
-        state.selectGroup("dev")
-        val initialDevTabs = state.tabsInGroup("dev")
-        assertTrue(initialDevTabs.isNotEmpty())
+        val devGroup = state.createTabGroup("开发")
+        state.selectGroup(devGroup.id)
+        val initialDevTabs = state.tabsInGroup(devGroup.id)
+        assertEquals(1, initialDevTabs.size)
 
         // Close all dev tabs one by one
         initialDevTabs.forEach { state.closeTab(it.id) }
-        val remaining = state.tabsInGroup("dev")
+        val remaining = state.tabsInGroup(devGroup.id)
         assertEquals(1, remaining.size)
         assertTrue(remaining.first().isStartPage)
 
@@ -54,7 +55,7 @@ class TerraBrowserStateTest {
         assertFalse(state.activeTab.isStartPage)
         val spawned = state.switchAdjacentTab(+1)
         assertTrue(spawned.isStartPage)
-        assertEquals(2, state.tabsInGroup("dev").size)
+        assertEquals(2, state.tabsInGroup(devGroup.id).size)
     }
 
     @Test
@@ -75,14 +76,15 @@ class TerraBrowserStateTest {
     fun sortingReorderingAndFilteringWorkPreservingPinnedTabs() {
         val state = TerraBrowserState(prefs = null)
         state.selectGroup("main")
-        val groupTabs = state.tabsInGroup("main")
-        val pinTarget = groupTabs.first { !it.isStartPage }
-        state.togglePinTab(pinTarget.id)
+        val tApple = state.createTab(groupId = "main", url = "https://www.apple.com", title = "Apple", select = false)
+        state.createTab(groupId = "main", url = "https://www.huawei.com", title = "Huawei", select = false)
+        state.createTab(groupId = "main", url = "https://www.wikipedia.org", title = "Wikipedia", select = false)
+        state.togglePinTab(tApple.id)
 
         state.sortTabsInGroup("main", TabSortMode.TITLE)
         val afterSort = state.tabsInGroup("main")
         assertTrue(afterSort.first().isPinned)
-        assertEquals(pinTarget.id, afterSort.first().id)
+        assertEquals(tApple.id, afterSort.first().id)
 
         val regulars = state.regularTabsInGroup("main")
         assertTrue(regulars.size >= 2)
@@ -97,6 +99,40 @@ class TerraBrowserStateTest {
         val filtered = state.tabsInGroup("main", includeSearchFilter = true)
         assertTrue(filtered.any { it.host.contains("huawei") })
         assertTrue(filtered.size < afterSort.size)
+    }
+
+    @Test
+    fun freshStateHasNoPresetGroupsOrFavoritesAndCustomSearchEnginesWork() {
+        val state = TerraBrowserState(prefs = null)
+        assertEquals(listOf("private", "main"), state.tabGroups.map { it.id })
+        assertEquals(1, state.tabsInGroup("private").size)
+        assertEquals(1, state.tabsInGroup("main").size)
+        assertTrue(state.tabsInGroup("private").first().isStartPage)
+        assertTrue(state.tabsInGroup("main").first().isStartPage)
+        assertTrue(state.favorites.isEmpty())
+        assertTrue(state.bookmarks.isEmpty())
+        assertTrue(state.readingList.isEmpty())
+        assertTrue(state.history.isEmpty())
+        assertTrue(state.recentSearches.isEmpty())
+        assertEquals(0, state.totalTrackersBlocked)
+
+        assertTrue(SearchEngine.builtIn.size >= 12)
+        assertTrue(BrowserUrlUtils.isValidSearchEngineTemplate("https://github.com/search?q=%s"))
+        assertTrue(BrowserUrlUtils.isValidSearchEngineTemplate("https://kagi.com/search?q={searchTerms}"))
+        assertTrue(BrowserUrlUtils.isValidSearchEngineTemplate("zhihu.com/search?q="))
+        assertFalse(BrowserUrlUtils.isValidSearchEngineTemplate("not a valid host"))
+
+        val custom = state.addCustomSearchEngine("GitHub", "github.com/search?q=")
+        assertTrue(custom != null)
+        assertEquals(custom!!.id, state.searchEngine.id)
+        assertEquals(
+            "https://github.com/search?q=100%25+test",
+            BrowserUrlUtils.normalizeInputToUrl("100% test", custom),
+        )
+
+        state.removeCustomSearchEngine(custom.id)
+        assertEquals(SearchEngine.BING.id, state.searchEngine.id)
+        assertTrue(state.customSearchEngines.isEmpty())
     }
 
     @Test

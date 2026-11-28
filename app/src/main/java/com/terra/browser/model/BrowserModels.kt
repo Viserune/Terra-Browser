@@ -42,10 +42,36 @@ enum class TabSortMode(val label: String) {
     WEBSITE("按网站排列"),
 }
 
-enum class SearchEngine(val label: String, val queryTemplate: String) {
-    BING("Bing", "https://www.bing.com/search?q=%s"),
-    BAIDU("百度", "https://www.baidu.com/s?wd=%s"),
-    GOOGLE("Google", "https://www.google.com/search?q=%s"),
+@Immutable
+data class SearchEngine(
+    val id: String,
+    val label: String,
+    val queryTemplate: String,
+    val isCustom: Boolean = false,
+) {
+    companion object {
+        val BAIDU = SearchEngine("baidu", "百度", "https://www.baidu.com/s?wd=%s")
+        val DOUYIN = SearchEngine("douyin", "抖音", "https://so.douyin.com/s?keyword=%s")
+        val SOGOU = SearchEngine("sogou", "搜狗", "https://www.sogou.com/web?query=%s")
+        val SO360 = SearchEngine("so360", "360 搜索", "https://www.so.com/s?q=%s")
+        val BING = SearchEngine("bing", "必应", "https://www.bing.com/search?q=%s")
+        val GOOGLE = SearchEngine("google", "Google", "https://www.google.com/search?q=%s")
+        val YAHOO = SearchEngine("yahoo", "Yahoo", "https://search.yahoo.com/search?p=%s")
+        val DUCKDUCKGO = SearchEngine("duckduckgo", "DuckDuckGo", "https://duckduckgo.com/?q=%s")
+        val ECOSIA = SearchEngine("ecosia", "Ecosia", "https://www.ecosia.org/search?q=%s")
+        val YANDEX = SearchEngine("yandex", "Yandex", "https://yandex.com/search/?text=%s")
+        val KAGI = SearchEngine("kagi", "Kagi", "https://kagi.com/search?q=%s")
+        val PERPLEXITY = SearchEngine("perplexity", "Perplexity", "https://www.perplexity.ai/search?q=%s")
+
+        val builtIn: List<SearchEngine> = listOf(
+            BAIDU, DOUYIN, SOGOU, SO360, BING, GOOGLE, YAHOO, DUCKDUCKGO, ECOSIA, YANDEX, KAGI, PERPLEXITY,
+        )
+
+        fun findById(id: String?, customEngines: List<SearchEngine> = emptyList()): SearchEngine? {
+            val key = id?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+            return (builtIn + customEngines).firstOrNull { it.id.equals(key, ignoreCase = true) }
+        }
+    }
 }
 
 enum class BrowserLayoutProfile {
@@ -301,6 +327,41 @@ object BrowserUrlUtils {
         "^(localhost(:\\d+)?(/.*)?|(\\d{1,3}\\.){3}\\d{1,3}(:\\d+)?(/.*)?|([\\w-]+\\.)+[a-zA-Z]{2,}(:\\d+)?(/.*)?)$",
     )
 
+    fun normalizeSearchTemplate(raw: String): String {
+        val trimmed = raw.trim()
+        if (trimmed.isEmpty()) return ""
+        val withScheme = if (schemeRegex.matches(trimmed)) trimmed else "https://$trimmed"
+        return if (withScheme.contains("%s") || withScheme.contains("{searchTerms}")) {
+            withScheme
+        } else {
+            "$withScheme%s"
+        }
+    }
+
+    fun isValidSearchEngineTemplate(raw: String): Boolean {
+        val normalized = normalizeSearchTemplate(raw)
+        if (normalized.isEmpty()) return false
+        val sample = normalized
+            .replace("%s", "test")
+            .replace("{searchTerms}", "test")
+        val parsed = runCatching { URI(sample) }.getOrNull() ?: return false
+        val scheme = parsed.scheme?.lowercase(Locale.ROOT) ?: return false
+        if (scheme != "http" && scheme != "https") return false
+        val host = parsed.host?.trim().orEmpty()
+        return host.isNotEmpty() && (host.contains('.') || host.equals("localhost", ignoreCase = true))
+    }
+
+    fun buildSearchUrl(queryTemplate: String, encodedQuery: String): String {
+        val trimmed = queryTemplate.trim()
+        if (trimmed.isEmpty()) return "https://www.bing.com/search?q=$encodedQuery"
+        val withScheme = if (schemeRegex.matches(trimmed)) trimmed else "https://$trimmed"
+        return when {
+            withScheme.contains("%s") -> withScheme.replace("%s", encodedQuery)
+            withScheme.contains("{searchTerms}") -> withScheme.replace("{searchTerms}", encodedQuery)
+            else -> "$withScheme$encodedQuery"
+        }
+    }
+
     fun normalizeInputToUrl(raw: String, searchEngine: SearchEngine = SearchEngine.BING): String {
         val trimmed = raw.trim()
         if (trimmed.isEmpty()) return ""
@@ -313,7 +374,7 @@ object BrowserUrlUtils {
             return "$scheme://$trimmed"
         }
         val encoded = URLEncoder.encode(trimmed, StandardCharsets.UTF_8.name())
-        return String.format(Locale.ROOT, searchEngine.queryTemplate, encoded)
+        return buildSearchUrl(searchEngine.queryTemplate, encoded)
     }
 
     fun displayHost(url: String): String {

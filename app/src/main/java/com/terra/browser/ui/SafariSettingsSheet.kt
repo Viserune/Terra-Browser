@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
@@ -39,11 +40,13 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.kyant.backdrop.Backdrop
 import com.kyant.backdrop.backdrops.rememberSolidColorBackdrop
 import com.terra.browser.model.AutoCloseTabsMode
+import com.terra.browser.model.BrowserUrlUtils
 import com.terra.browser.model.DarkModePreference
 import com.terra.browser.model.OpenLinkMode
 import com.terra.browser.model.SearchEngine
@@ -66,6 +69,7 @@ import io.liquidkit.LiquidKitSheetDetent
 import io.liquidkit.LiquidKitStepper
 import io.liquidkit.LiquidKitSwipeBackStyle
 import io.liquidkit.LiquidKitSymbol
+import io.liquidkit.LiquidKitTextField
 import io.liquidkit.LocalLiquidKitContentColor
 import io.liquidkit.LocalLiquidKitModalBackdrop
 import io.liquidkit.LocalLiquidKitSheetContext
@@ -74,7 +78,6 @@ import io.liquidkit.liquidKitColors
 import io.liquidkit.rememberLiquidKitNavStackState
 
 private val DarkModeOptionLabels = DarkModePreference.entries.map { it.label }
-private val SearchEngineOptionLabels = SearchEngine.entries.map { it.label }
 private val OpenLinkOptionLabels = OpenLinkMode.entries.map { it.label }
 private val AutoCloseOptionLabels = AutoCloseTabsMode.entries.map { it.label }
 private val SiteDarkOptionLabels = SiteDarkMode.entries.map { it.label }
@@ -83,6 +86,8 @@ private enum class SettingsRoute(val title: String) {
     ROOT("设置"),
     APPEARANCE_TAB_BAR("外观与标签栏"),
     SEARCH_START("搜索与起始页"),
+    SEARCH_ENGINE("搜索引擎"),
+    ADD_SEARCH_ENGINE("添加搜索引擎"),
     TABS_ACTIONS("标签页与操作"),
     PRIVACY_SECURITY("隐私与安全"),
     WEB_READING("网页与阅读"),
@@ -177,9 +182,20 @@ fun SafariSettingsSheet(
                         )
                         SettingsRoute.SEARCH_START -> SearchAndStartPage(
                             state = state,
-                            backdrop = sheetSolidBackdrop,
+                            accentBlue = accentBlue,
+                            onNavigate = { navState.push(it) },
+                        )
+                        SettingsRoute.SEARCH_ENGINE -> SearchEngineSelectionPage(
+                            state = state,
                             colors = colors,
                             accentBlue = accentBlue,
+                            onAddCustom = { navState.push(SettingsRoute.ADD_SEARCH_ENGINE) },
+                        )
+                        SettingsRoute.ADD_SEARCH_ENGINE -> AddCustomSearchEnginePage(
+                            state = state,
+                            colors = colors,
+                            accentBlue = accentBlue,
+                            onSaved = { navState.pop() },
                         )
                         SettingsRoute.TABS_ACTIONS -> TabsAndActionsPage(
                             state = state,
@@ -387,28 +403,21 @@ private fun AppearanceAndTabBarPage(
 @Composable
 private fun SearchAndStartPage(
     state: TerraBrowserState,
-    backdrop: Backdrop,
-    colors: LiquidKitColors,
     accentBlue: Color,
+    onNavigate: (SettingsRoute) -> Unit,
 ) {
     Column(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(18.dp),
     ) {
         LiquidKitListSection(title = "搜索引擎") {
-            row(inset = true, separatorStart = 16.dp) {
-                LiquidKitSegmentedPicker(
-                    options = SearchEngineOptionLabels,
-                    selected = state.searchEngine.label,
-                    select = { label ->
-                        state.searchEngine = SearchEngine.entries.firstOrNull { it.label == label } ?: state.searchEngine
-                        state.persist()
-                    },
-                    colors = colors,
-                    backdrop = backdrop,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            }
+            navigationRow(
+                title = "搜索引擎",
+                leading = LiquidKitSymbol.Search,
+                tint = accentBlue,
+                trailingText = state.searchEngine.label,
+                onClick = { onNavigate(SettingsRoute.SEARCH_ENGINE) },
+            )
             toggleRow(
                 title = "显示最近的搜索项目",
                 checked = state.showRecentSearches,
@@ -435,6 +444,231 @@ private fun SearchAndStartPage(
                     state.clearRecentSearches()
                     state.showBanner("已清除最近搜索")
                 },
+            )
+        }
+    }
+}
+
+@Composable
+private fun SearchEngineSelectionPage(
+    state: TerraBrowserState,
+    colors: LiquidKitColors,
+    accentBlue: Color,
+    onAddCustom: () -> Unit,
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(20.dp),
+    ) {
+        LiquidKitListSection {
+            SearchEngine.builtIn.forEach { engine ->
+                val selected = state.searchEngine.id == engine.id
+                row(
+                    inset = true,
+                    separatorStart = 16.dp,
+                    selected = selected,
+                    onClick = { state.selectSearchEngine(engine) },
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 30.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        BasicText(
+                            text = engine.label,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            style = TextStyle(color = colors.ink, fontSize = 17.sp),
+                            modifier = Modifier.weight(1f),
+                        )
+                        if (selected) {
+                            TerraSymbolIcon(
+                                symbol = LiquidKitSymbol.Check,
+                                tint = accentBlue,
+                                modifier = Modifier.size(18.dp),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        LiquidKitListSection(title = "自定义搜索引擎") {
+            state.customSearchEngines.forEach { engine ->
+                val selected = state.searchEngine.id == engine.id
+                row(
+                    inset = true,
+                    separatorStart = 16.dp,
+                    selected = selected,
+                    onClick = { state.selectSearchEngine(engine) },
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 38.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(2.dp),
+                        ) {
+                            BasicText(
+                                text = engine.label,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                style = TextStyle(color = colors.ink, fontSize = 17.sp),
+                            )
+                            BasicText(
+                                text = engine.queryTemplate,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                style = TextStyle(color = colors.secondary, fontSize = 12.sp),
+                            )
+                        }
+                        if (selected) {
+                            TerraSymbolIcon(
+                                symbol = LiquidKitSymbol.Check,
+                                tint = accentBlue,
+                                modifier = Modifier.size(18.dp),
+                            )
+                        }
+                        Box(
+                            modifier = Modifier
+                                .size(32.dp)
+                                .clip(CircleShape)
+                                .clickable(
+                                    interactionSource = remember { MutableInteractionSource() },
+                                    indication = null,
+                                ) {
+                                    state.removeCustomSearchEngine(engine.id)
+                                    state.showBanner("已移除 ${engine.label}")
+                                },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            TerraSymbolIcon(
+                                symbol = LiquidKitSymbol.Trash,
+                                tint = Color(0xFFFF3B30),
+                                modifier = Modifier.size(16.dp),
+                            )
+                        }
+                    }
+                }
+            }
+            actionRow(
+                title = "添加自定义搜索引擎",
+                leading = LiquidKitSymbol.Add,
+                tint = accentBlue,
+                onClick = onAddCustom,
+            )
+        }
+    }
+}
+
+@Composable
+private fun AddCustomSearchEnginePage(
+    state: TerraBrowserState,
+    colors: LiquidKitColors,
+    accentBlue: Color,
+    onSaved: () -> Unit,
+) {
+    var name by remember { mutableStateOf("") }
+    var template by remember { mutableStateOf("") }
+    var errorText by remember { mutableStateOf<String?>(null) }
+
+    val submit: () -> Unit = {
+        val cleanName = name.trim()
+        when {
+            cleanName.isEmpty() -> errorText = "请输入搜索引擎名称"
+            !BrowserUrlUtils.isValidSearchEngineTemplate(template) -> {
+                errorText = "请输入有效的搜索网址，例如 https://example.com/search?q=%s"
+            }
+            else -> {
+                state.addCustomSearchEngine(cleanName, template, select = true)
+                state.showBanner("已添加并切换至 $cleanName")
+                onSaved()
+            }
+        }
+    }
+
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(18.dp),
+    ) {
+        LiquidKitListSection(title = "引擎信息") {
+            row(inset = true, separatorStart = 16.dp) {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    BasicText(
+                        text = "名称",
+                        style = TextStyle(color = colors.secondary, fontSize = 13.sp, fontWeight = FontWeight.Medium),
+                    )
+                    LiquidKitTextField(
+                        value = name,
+                        onValueChange = {
+                            name = it
+                            errorText = null
+                        },
+                        placeholder = "例如：GitHub、知乎、SearXNG",
+                        colors = colors,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            }
+            row(inset = true, separatorStart = 16.dp) {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    BasicText(
+                        text = "搜索网址模板",
+                        style = TextStyle(color = colors.secondary, fontSize = 13.sp, fontWeight = FontWeight.Medium),
+                    )
+                    LiquidKitTextField(
+                        value = template,
+                        onValueChange = {
+                            template = it
+                            errorText = null
+                        },
+                        placeholder = "https://example.com/search?q=%s",
+                        colors = colors,
+                        onDone = submit,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            }
+        }
+
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 6.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            BasicText(
+                text = "使用 %s 或 {searchTerms} 代表搜索关键词；若仅填写前缀（如 https://example.com/search?q=），会自动追加关键词。",
+                style = TextStyle(color = colors.secondary, fontSize = 12.5.sp, lineHeight = 17.sp),
+            )
+            if (template.isNotBlank() && BrowserUrlUtils.isValidSearchEngineTemplate(template)) {
+                BasicText(
+                    text = "示例：${BrowserUrlUtils.buildSearchUrl(BrowserUrlUtils.normalizeSearchTemplate(template), "Terra")}",
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    style = TextStyle(color = accentBlue, fontSize = 12.sp),
+                )
+            }
+            if (errorText != null) {
+                BasicText(
+                    text = errorText!!,
+                    style = TextStyle(color = Color(0xFFFF3B30), fontSize = 12.5.sp, fontWeight = FontWeight.Medium),
+                )
+            }
+        }
+
+        LiquidKitListSection {
+            actionRow(
+                title = "保存并设为默认",
+                leading = LiquidKitSymbol.Check,
+                tint = accentBlue,
+                onClick = submit,
             )
         }
     }
