@@ -33,11 +33,14 @@ import io.liquidkit.LiquidKitSymbol
     val groupColor=if (dark) Color(0xff363638) else Color.White
     val noRipple=remember { MutableInteractionSource() }
     AnimatedVisibility(visibleState=visible,enter=EnterTransition.None,exit=ExitTransition.None) {
-        val shade by transition.animateFloat(transitionSpec={ tween(if (targetState==EnterExitState.Visible) 350 else 230) },
+        val shade by transition.animateFloat(transitionSpec={
+            if (targetState==EnterExitState.Visible) tween(350)
+            else tween(215,easing=CubicBezierEasing(.333f,.72f,.667f,.98f))
+        },
             label="选项背景") { if (it==EnterExitState.Visible) .21f else 0f }
         val travel by transition.animateFloat(transitionSpec={
             if (targetState==EnterExitState.Visible) tween(530,easing=CubicBezierEasing(.16f,.88f,.22f,1f))
-            else tween(300,easing=CubicBezierEasing(.40f,.01f,.83f,.38f))
+            else tween(260,easing=CubicBezierEasing(.333f,.667f,.667f,1f))
         },label="选项窗口位移") { if (it==EnterExitState.Visible) 0f else 1f }
         Box(Modifier.fillMaxSize()) {
             Box(Modifier.matchParentSize().graphicsLayer { alpha=shade }.background(Color.Black)
@@ -47,7 +50,7 @@ import io.liquidkit.LiquidKitSymbol
             BoxWithConstraints(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
                 .padding(horizontal=16.dp,vertical=vertical),contentAlignment=Alignment.Center) {
                 val height=minOf(738.dp,maxHeight)
-                val distance=(maxHeight+height)/2+32.dp
+                val distance=(maxHeight+height)/2+vertical
                 DialogGlassSurface(capture,Modifier.width(minOf(540.dp,maxWidth)).height(height).graphicsLayer {
                     translationY=distance.toPx()*travel
                 }.semantics { paneTitle="共享选项" },RoundedCornerShape(30.dp),
