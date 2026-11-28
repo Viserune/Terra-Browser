@@ -1,23 +1,16 @@
 package com.terra.browser.webview
 
 import android.annotation.SuppressLint
-import android.app.Activity
 import android.content.Context
-import android.content.ContextWrapper
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
-import android.graphics.Rect
-import android.os.Build
 import android.os.Bundle
 import android.os.Handler
-import android.os.HandlerThread
 import android.os.Looper
 import android.os.Parcel
-import android.view.PixelCopy
 import android.view.View
 import android.view.ViewGroup
-import android.view.Window
 import android.webkit.CookieManager
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
@@ -37,6 +30,7 @@ import java.io.ByteArrayInputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.util.concurrent.Executors
+import kotlin.math.roundToInt
 
 class TerraWebViewPool(
     private val context: Context,
@@ -57,11 +51,10 @@ class TerraWebViewPool(
     private val entries = LinkedHashMap<String, PoolEntry>()
     private val savedStateCache = HashMap<String, ByteArray>()
     private val lastSnapshotAtMs = HashMap<String, Long>()
+    private val thumbnailUrls = HashMap<String, String>()
     private val pendingSnapshotRunnables = HashMap<String, Runnable>()
     private val mainHandler = Handler(Looper.getMainLooper())
     private val ioExecutor = Executors.newSingleThreadExecutor()
-    private var pixelCopyThread: HandlerThread? = null
-    private var pixelCopyHandler: Handler? = null
     private val thumbsDir = File(context.cacheDir, "tab_thumbs").apply { mkdirs() }
     private val faviconsDir = File(context.cacheDir, "tab_favicons").apply { mkdirs() }
     private val statesDir = File(context.cacheDir, "tab_states").apply { mkdirs() }
@@ -647,27 +640,6 @@ class TerraWebViewPool(
         return wv.isAttachedToWindow && wv.width > 0 && wv.height > 0 && wv.progress >= 30
     }
 
-    private fun unwrapActivity(ctx: Context?): Activity? {
-        var cur = ctx
-        while (cur is ContextWrapper) {
-            if (cur is Activity) return cur
-            cur = cur.baseContext
-        }
-        return null
-    }
-
-    private fun findWindow(view: View): Window? {
-        return (unwrapActivity(view.rootView?.context) ?: unwrapActivity(view.context))?.window
-    }
-
-    private fun getOrCreatePixelCopyHandler(): Handler {
-        val existing = pixelCopyHandler
-        if (existing != null) return existing
-        val thread = HandlerThread("terra-pixelcopy").apply { start() }
-        pixelCopyThread = thread
-        return Handler(thread.looper).also { pixelCopyHandler = it }
-    }
-
     fun captureSnapshotBeforeHide(tabId: String) {
         val entry = entries[tabId] ?: return
         val wv = entry.webView
@@ -675,13 +647,7 @@ class TerraWebViewPool(
         if (!wv.isAttachedToWindow || wv.visibility != View.VISIBLE || wv.width <= 0 || wv.height <= 0) {
             return
         }
-        val lastAt = lastSnapshotAtMs[tabId] ?: 0L
-        if (state.thumbnails.containsKey(tabId) && System.currentTimeMillis() - lastAt < 10000L) {
-            return
-        }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && findWindow(wv) != null) {
-            captureSnapshot(tabId, force = true)
-        }
+        captureSnapshotSync(tabId, force = true)
     }
 
     fun scheduleSnapshot(tabId: String, delayMs: Long = 650L) {
@@ -694,132 +660,93 @@ class TerraWebViewPool(
         mainHandler.postDelayed(task, delayMs)
     }
 
-    fun captureSnapshot(tabId: String, targetWidth: Int = 360, force: Boolean = false): ImageBitmap? {
+    fun captureSnapshotSync(tabId: String, force: Boolean = true): ImageBitmap? {
+        val entry = entries[tabId] ?: return state.thumbnails[tabId]
+        val wv = entry.webView
+        val w = wv.width
+        val h = wv.height
+        if (w <= 0 || h <= 0 || wv.contentHeight <= 0) return state.thumbnails[tabId]
+        if (wv.visibility != View.VISIBLE || !wv.isAttachedToWindow) {
+            return state.thumbnails[tabId]
+        }
+        val currentUrl = wv.url.orEmpty().ifBlank { entry.loadedUrl }
+        val scale = minOf(1f, 540f / w.toFloat(), 1080f / h.toFloat()).coerceIn(0.2f, 1f)
+        val bmpW = (w * scale).roundToInt().coerceAtLeast(1)
+        val bmpH = (h * scale).roundToInt().coerceAtLeast(1)
+        val bitmap = runCatching {
+            Bitmap.createBitmap(bmpW, bmpH, Bitmap.Config.ARGB_8888).also { bmp ->
+                val canvas = Canvas(bmp)
+                canvas.scale(scale, scale)
+                canvas.translate(-wv.scrollX.toFloat(), -wv.scrollY.toFloat())
+                wv.draw(canvas)
+            }
+        }.getOrNull() ?: return state.thumbnails[tabId]
+
+        if (isBitmapUniformBlank(bitmap)) {
+            val sameUrlCached = state.thumbnails.containsKey(tabId) && thumbnailUrls[tabId] == currentUrl
+            bitmap.recycle()
+            if (!force && wv.progress in 1..99) {
+                scheduleSnapshot(tabId, delayMs = 600L)
+            }
+            return if (sameUrlCached || force) state.thumbnails[tabId] else state.thumbnails[tabId]
+        }
+
+        val img = bitmap.asImageBitmap()
+        if (state.tabs.any { it.id == tabId }) {
+            state.thumbnails[tabId] = img
+            thumbnailUrls[tabId] = currentUrl
+            lastSnapshotAtMs[tabId] = System.currentTimeMillis()
+        }
+        runIo {
+            runCatching {
+                val tmp = File(thumbsDir, "$tabId.tmp")
+                FileOutputStream(tmp).use { out ->
+                    bitmap.compress(Bitmap.CompressFormat.JPEG, 85, out)
+                }
+                tmp.renameTo(File(thumbsDir, "$tabId.jpg"))
+            }
+        }
+        return img
+    }
+
+    fun captureSnapshot(tabId: String, @Suppress("UNUSED_PARAMETER") targetWidth: Int = 540, force: Boolean = false): ImageBitmap? {
         if (isTransitionActive && !force) {
             scheduleSnapshot(tabId, delayMs = 900L)
             return state.thumbnails[tabId]
         }
         val now = System.currentTimeMillis()
-        if (!force && state.thumbnails.containsKey(tabId)) {
-            val lastAt = lastSnapshotAtMs[tabId] ?: 0L
-            if (now - lastAt < 10000L) {
-                return state.thumbnails[tabId]
-            }
-        }
         val entry = entries[tabId] ?: return state.thumbnails[tabId]
-        val wv = entry.webView
-        val w = wv.width
-        val h = wv.height
-        if (w <= 0 || h <= 0) return state.thumbnails[tabId]
-        if (wv.visibility != View.VISIBLE || !wv.isAttachedToWindow) {
-            return state.thumbnails[tabId]
-        }
-        val scale = (targetWidth.toFloat() / w.toFloat()).coerceIn(0.2f, 1f)
-        val bmpW = (w * scale).toInt().coerceAtLeast(1)
-        val bmpH = (h * scale).toInt().coerceAtLeast(1)
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val window = findWindow(wv)
-            if (window != null) {
-                val loc = IntArray(2)
-                wv.getLocationInWindow(loc)
-                val decor = window.decorView
-                val left = loc[0].coerceIn(0, (decor.width - 1).coerceAtLeast(0))
-                val top = loc[1].coerceIn(0, (decor.height - 1).coerceAtLeast(0))
-                val right = (loc[0] + w).coerceIn(left + 1, decor.width.coerceAtLeast(left + 1))
-                val bottom = (loc[1] + h).coerceIn(top + 1, decor.height.coerceAtLeast(top + 1))
-                val srcRect = Rect(left, top, right, bottom)
-                val bitmap = Bitmap.createBitmap(bmpW, bmpH, Bitmap.Config.RGB_565)
-                lastSnapshotAtMs[tabId] = now
-                val progressSnapshot = wv.progress
-                runCatching {
-                    PixelCopy.request(
-                        window,
-                        srcRect,
-                        bitmap,
-                        { copyResult ->
-                            if (copyResult == PixelCopy.SUCCESS) {
-                                processCapturedSnapshotAsync(tabId, bitmap, force, progressSnapshot)
-                            } else {
-                                bitmap.recycle()
-                            }
-                        },
-                        getOrCreatePixelCopyHandler(),
-                    )
-                }.onFailure {
-                    bitmap.recycle()
-                }
+        val currentUrl = entry.webView.url.orEmpty().ifBlank { entry.loadedUrl }
+        if (!force && state.thumbnails.containsKey(tabId) && thumbnailUrls[tabId] == currentUrl) {
+            val lastAt = lastSnapshotAtMs[tabId] ?: 0L
+            if (now - lastAt < 3500L) {
                 return state.thumbnails[tabId]
             }
         }
-
-        if (isTransitionActive) return state.thumbnails[tabId]
-
-        return runCatching {
-            val bitmap = Bitmap.createBitmap(bmpW, bmpH, Bitmap.Config.RGB_565)
-            val canvas = Canvas(bitmap)
-            canvas.scale(scale, scale)
-            canvas.translate(-wv.scrollX.toFloat(), -wv.scrollY.toFloat())
-            wv.draw(canvas)
-            lastSnapshotAtMs[tabId] = System.currentTimeMillis()
-            processCapturedSnapshotAsync(tabId, bitmap, force, wv.progress)
-            state.thumbnails[tabId]
-        }.getOrNull() ?: state.thumbnails[tabId]
+        return captureSnapshotSync(tabId, force = force)
     }
 
-    private fun processCapturedSnapshotAsync(
-        tabId: String,
-        bitmap: Bitmap,
-        force: Boolean,
-        progressSnapshot: Int,
-    ) {
-        runIo {
-            val bmpW = bitmap.width
-            val bmpH = bitmap.height
-            if (bmpW <= 0 || bmpH <= 0) {
-                bitmap.recycle()
-                return@runIo
-            }
-            val samples = IntArray(64)
-            val lumaBuckets = HashSet<Int>(16)
-            var idx = 0
-            for (gy in 0 until 8) {
-                val py = ((bmpH - 1) * (gy + 0.5f) / 8f).toInt().coerceIn(0, bmpH - 1)
-                for (gx in 0 until 8) {
-                    val px = ((bmpW - 1) * (gx + 0.5f) / 8f).toInt().coerceIn(0, bmpW - 1)
-                    val pixel = bitmap.getPixel(px, py)
-                    samples[idx++] = pixel
-                    val luma = (((pixel shr 16) and 0xFF) * 3 + ((pixel shr 8) and 0xFF) * 6 + (pixel and 0xFF)) / 10
-                    lumaBuckets.add(luma / 16)
-                }
-            }
-            val topUniform = BrowserUrlUtils.isUniformBlankSample(samples.copyOfRange(0, 16))
-            val bottomUniform = BrowserUrlUtils.isUniformBlankSample(samples.copyOfRange(16, 64))
-            val looksBlank = BrowserUrlUtils.isUniformBlankSample(samples) ||
-                (topUniform && bottomUniform && lumaBuckets.size <= 3)
-            if (looksBlank) {
-                bitmap.recycle()
-                if (!force && progressSnapshot in 1..99) {
-                    mainHandler.post { scheduleSnapshot(tabId, delayMs = 600L) }
-                }
-                return@runIo
-            }
-
-            runCatching {
-                val tmp = File(thumbsDir, "$tabId.tmp")
-                FileOutputStream(tmp).use { out ->
-                    bitmap.compress(Bitmap.CompressFormat.JPEG, 82, out)
-                }
-                tmp.renameTo(File(thumbsDir, "$tabId.jpg"))
-            }
-            val img = bitmap.asImageBitmap()
-            mainHandler.post {
-                if (state.tabs.any { it.id == tabId }) {
-                    state.thumbnails[tabId] = img
-                    lastSnapshotAtMs[tabId] = System.currentTimeMillis()
-                }
+    private fun isBitmapUniformBlank(bitmap: Bitmap): Boolean {
+        val bmpW = bitmap.width
+        val bmpH = bitmap.height
+        if (bmpW <= 0 || bmpH <= 0) return true
+        val samples = IntArray(64)
+        val lumaBuckets = HashSet<Int>(16)
+        var idx = 0
+        for (gy in 0 until 8) {
+            val py = ((bmpH - 1) * (gy + 0.5f) / 8f).toInt().coerceIn(0, bmpH - 1)
+            for (gx in 0 until 8) {
+                val px = ((bmpW - 1) * (gx + 0.5f) / 8f).toInt().coerceIn(0, bmpW - 1)
+                val pixel = bitmap.getPixel(px, py)
+                samples[idx++] = pixel
+                val luma = (((pixel shr 16) and 0xFF) * 3 + ((pixel shr 8) and 0xFF) * 6 + (pixel and 0xFF)) / 10
+                lumaBuckets.add(luma / 16)
             }
         }
+        val topUniform = BrowserUrlUtils.isUniformBlankSample(samples.copyOfRange(0, 16))
+        val bottomUniform = BrowserUrlUtils.isUniformBlankSample(samples.copyOfRange(16, 64))
+        return BrowserUrlUtils.isUniformBlankSample(samples) ||
+            (topUniform && bottomUniform && lumaBuckets.size <= 3)
     }
 
     fun saveTabStateDeferred(tabId: String) {
@@ -1010,6 +937,7 @@ class TerraWebViewPool(
     fun evictTab(tabId: String) {
         pendingSnapshotRunnables.remove(tabId)?.let { mainHandler.removeCallbacks(it) }
         lastSnapshotAtMs.remove(tabId)
+        thumbnailUrls.remove(tabId)
         val removed = entries.remove(tabId)
         if (removed != null) {
             (removed.webView.parent as? ViewGroup)?.removeView(removed.webView)
@@ -1043,9 +971,6 @@ class TerraWebViewPool(
             entry.webView.destroy()
         }
         entries.clear()
-        pixelCopyThread?.quitSafely()
-        pixelCopyThread = null
-        pixelCopyHandler = null
         ioExecutor.shutdown()
     }
 

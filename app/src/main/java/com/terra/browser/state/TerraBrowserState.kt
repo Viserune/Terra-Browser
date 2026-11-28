@@ -548,6 +548,7 @@ class TerraBrowserState(
     fun navigateToStartPage() {
         closeReader()
         val tab = activeTab
+        thumbnails.remove(tab.id)
         updateTab(tab.id) {
             it.copy(
                 url = "",

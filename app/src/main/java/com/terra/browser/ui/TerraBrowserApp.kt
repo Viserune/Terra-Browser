@@ -218,7 +218,7 @@ fun TerraBrowserApp(
         LaunchedEffect(state.isOverviewOpen) {
             if (state.isOverviewOpen) {
                 val curTab = state.activeTab
-                if (!curTab.isStartPage) {
+                if (!curTab.isStartPage && releaseFromRect == null && !state.thumbnails.containsKey(curTab.id)) {
                     pool.captureSnapshotBeforeHide(curTab.id)
                 }
                 pendingOverviewSelectionTabId = null
@@ -767,23 +767,35 @@ fun TerraBrowserApp(
                                 isPullRefreshing || (if (isTopDragging) dragPullRefreshPx else pullRefreshAnim.value) > 4f
                             }
                         }
+                        val isHeroMorphActive by remember {
+                            derivedStateOf {
+                                overviewProgress.value > 0.005f ||
+                                    releaseFromRect != null ||
+                                    closingFromRect != null ||
+                                    isBarDragging ||
+                                    isSettlingBarDrag
+                            }
+                        }
                         val cachedWarm = remember(activeTab.id) { pool.isTabLoadedAndAttached(activeTab.id) }
-                        if (cachedWarm && settledWebViewTabId != activeTab.id) {
+                        if (cachedWarm && isPageVisible && !isHeroMorphActive && settledWebViewTabId != activeTab.id) {
                             settledWebViewTabId = activeTab.id
                         }
                         val veilAnim = remember(activeTab.id) {
-                            Animatable(if (settledWebViewTabId == activeTab.id || cachedWarm) 0f else 1f)
+                            Animatable(if (settledWebViewTabId == activeTab.id && !isHeroMorphActive) 0f else 1f)
                         }
                         val keepTransitionVeil by remember(activeTab.id) {
                             derivedStateOf {
-                                settledWebViewTabId != activeTab.id && !pool.isTabLoadedAndAttached(activeTab.id)
+                                val hasThumb = state.thumbnails[activeTab.id] != null
+                                (isHeroMorphActive && hasThumb) ||
+                                    (settledWebViewTabId != activeTab.id && !pool.isTabLoadedAndAttached(activeTab.id)) ||
+                                    (settledWebViewTabId != activeTab.id && hasThumb)
                             }
                         }
-                        LaunchedEffect(activeTab.id) {
-                            if (pool.isTabLoadedAndAttached(activeTab.id)) {
-                                settledWebViewTabId = activeTab.id
-                            } else if (settledWebViewTabId != activeTab.id) {
-                                delay(450)
+                        LaunchedEffect(activeTab.id, isPageVisible, isHeroMorphActive) {
+                            if (!isPageVisible) {
+                                settledWebViewTabId = null
+                            } else if (!isHeroMorphActive && settledWebViewTabId != activeTab.id) {
+                                delay(if (pool.isTabLoadedAndAttached(activeTab.id)) 320L else 450L)
                                 if (settledWebViewTabId != activeTab.id) {
                                     settledWebViewTabId = activeTab.id
                                 }
@@ -793,7 +805,7 @@ fun TerraBrowserApp(
                             if (keepTransitionVeil) {
                                 veilAnim.snapTo(1f)
                             } else {
-                                veilAnim.animateTo(0f, tween(90, easing = FastOutSlowInEasing))
+                                veilAnim.animateTo(0f, tween(110, easing = FastOutSlowInEasing))
                             }
                         }
                         val showVeil by remember(activeTab.id) {
@@ -895,7 +907,7 @@ fun TerraBrowserApp(
                                 Box(
                                     modifier = Modifier
                                         .fillMaxSize()
-                                        .graphicsLayer { alpha = veilAnim.value.coerceIn(0f, 1f) },
+                                        .graphicsLayer { alpha = if (keepTransitionVeil) 1f else veilAnim.value.coerceIn(0f, 1f) },
                                 ) {
                                     AdjacentTabCardPreview(
                                         state = state,
@@ -1046,6 +1058,9 @@ fun TerraBrowserApp(
             val handleBarDragStart: () -> Unit = {
                 barGestureJob?.cancel()
                 barGestureJob = null
+                if (!activeTab.isStartPage) {
+                    pool.captureSnapshotSync(activeTab.id, force = true)
+                }
                 if (isSettlingBarDrag) {
                     liveDragX = settleDragX.value
                     rawDragX = settleDragX.value
@@ -1116,8 +1131,8 @@ fun TerraBrowserApp(
                             liveDragY = 0f
                             settleDragX.snapTo(0f)
                             settleDragY.snapTo(0f)
-                            if (!activeTab.isStartPage) {
-                                pool.captureSnapshotBeforeHide(activeTab.id)
+                            if (!activeTab.isStartPage && !state.thumbnails.containsKey(activeTab.id)) {
+                                pool.captureSnapshotSync(activeTab.id, force = true)
                             }
                             state.isOverviewOpen = true
                         }
@@ -1220,7 +1235,7 @@ fun TerraBrowserApp(
                 onBarDragEnd = handleBarDragEnd,
                 onOpenOverview = {
                     if (!activeTab.isStartPage) {
-                        pool.captureSnapshotBeforeHide(activeTab.id)
+                        pool.captureSnapshotSync(activeTab.id, force = true)
                     }
                     state.isOverviewOpen = true
                 },
@@ -1337,6 +1352,7 @@ private fun AdjacentTabCardPreview(
             Image(
                 bitmap = thumb,
                 contentDescription = peekTab.title,
+                alignment = Alignment.TopCenter,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize(),
             )

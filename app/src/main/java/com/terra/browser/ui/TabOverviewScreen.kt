@@ -124,6 +124,7 @@ import com.kyant.backdrop.drawBackdrop
 import com.kyant.backdrop.effects.blur
 import com.terra.browser.model.BrowserLayoutProfile
 import com.terra.browser.model.BrowserTab
+import com.terra.browser.model.FavoriteItem
 import com.terra.browser.model.TabGroup
 import com.terra.browser.model.TabSortMode
 import com.terra.browser.state.TerraBrowserState
@@ -165,10 +166,6 @@ private val OverviewPillShape = RoundedCornerShape(26.dp)
 private val OverviewMenuShape = RoundedCornerShape(30.dp)
 private val OverviewCardBottomScrimBrush = Brush.verticalGradient(
     listOf(Color.Transparent, Color.Black.copy(alpha = 0.28f)),
-)
-private val MiniStartPageTileRows = listOf(
-    listOf(0xFF1C1C1E, 0xFF2E9AFE, 0xFF2932E1, 0xFF00809D),
-    listOf(0xFF5856D6, 0xFF24292F, 0xFF34C759, 0xFFC7000B),
 )
 private val MiniStartTileShape = RoundedCornerShape(6.dp)
 private val MiniStartBarShape = RoundedCornerShape(8.dp)
@@ -742,6 +739,7 @@ fun TabOverviewScreen(
                     var liveSwipeX by remember(tab.id) { mutableFloatStateOf(0f) }
                     val cardWidthPxRef = remember(tab.id) { FloatArray(1) }
                     val preTransformCoordsRef = remember(tab.id) { arrayOfNulls<LayoutCoordinates>(1) }
+                    val previewBoundsRef = remember(tab.id) { arrayOfNulls<Rect>(1) }
                     val targetScale = when {
                         isDraggingThis -> 1.07f
                         isLiftArmed -> 1.04f
@@ -763,9 +761,6 @@ fun TabOverviewScreen(
                             .onGloballyPositioned { coords ->
                                 preTransformCoordsRef[0] = coords
                                 cardWidthPxRef[0] = coords.size.width.toFloat()
-                                if (!pagerState.isScrollInProgress && coords.isAttached && !isDraggingThis && closingTabIds[tab.id] != true) {
-                                    cardBoundsMap[tab.id] = coords.boundsInRoot()
-                                }
                             }
                             .pointerInput(tab.id, group.id) {
                                 val preHoldSlop = maxOf(viewConfiguration.touchSlop * 1.1f, with(density) { 10.dp.toPx() })
@@ -860,7 +855,7 @@ fun TabOverviewScreen(
                                                             }
                                                             triggerHaptic(LiquidKitHaptic.SelectionTick)
                                                         } else {
-                                                            preTransformCoordsRef[0]?.takeIf { it.isAttached }?.boundsInRoot()?.let {
+                                                            previewBoundsRef[0]?.let {
                                                                 cardBoundsMap[tab.id] = it
                                                             }
                                                             latestOnSelectTab(tab)
@@ -1042,6 +1037,7 @@ fun TabOverviewScreen(
                                 tab = tab,
                                 thumbnail = state.thumbnails[tab.id],
                                 favicon = state.favicons[tab.id],
+                                favorites = state.favorites,
                                 isActive = isActive,
                                 isDragged = isDraggingThis,
                                 isPrivateGroup = group.isPrivate,
@@ -1049,6 +1045,12 @@ fun TabOverviewScreen(
                                 aspectRatio = cardAspectRatio,
                                 isSelectionMode = isSelectionMode,
                                 isSelected = isSelectedInMode,
+                                onPreviewPositioned = { rect ->
+                                    previewBoundsRef[0] = rect
+                                    if (!pagerState.isScrollInProgress && !isDraggingThis && closingTabIds[tab.id] != true) {
+                                        cardBoundsMap[tab.id] = rect
+                                    }
+                                },
                                 onClose = {
                                     if (closingTabIds[tab.id] != true) {
                                         closingTabIds[tab.id] = true
@@ -1830,6 +1832,7 @@ private fun OverviewTabCard(
     tab: BrowserTab,
     thumbnail: androidx.compose.ui.graphics.ImageBitmap?,
     favicon: androidx.compose.ui.graphics.ImageBitmap? = null,
+    favorites: List<FavoriteItem> = emptyList(),
     isActive: Boolean,
     isDragged: Boolean,
     isPrivateGroup: Boolean,
@@ -1837,6 +1840,7 @@ private fun OverviewTabCard(
     aspectRatio: Float = 0.68f,
     isSelectionMode: Boolean = false,
     isSelected: Boolean = false,
+    onPreviewPositioned: ((Rect) -> Unit)? = null,
     onClose: () -> Unit,
 ) {
     val accentBlue = OverviewAccentBlue
@@ -1852,6 +1856,11 @@ private fun OverviewTabCard(
             modifier = Modifier
                 .fillMaxWidth()
                 .aspectRatio(aspectRatio)
+                .onGloballyPositioned { coords ->
+                    if (coords.isAttached) {
+                        onPreviewPositioned?.invoke(coords.boundsInRoot())
+                    }
+                }
                 .clip(OverviewCardShape)
                 .background(cardSurface)
                 .border(
@@ -1872,11 +1881,12 @@ private fun OverviewTabCard(
                 Image(
                     bitmap = thumbnail,
                     contentDescription = tab.title,
+                    alignment = Alignment.TopCenter,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.fillMaxSize(),
                 )
             } else if (tab.isStartPage) {
-                MiniStartPagePreview(isPrivate = isPrivateGroup, isDark = isDark)
+                MiniStartPagePreview(isPrivate = isPrivateGroup, isDark = isDark, favorites = favorites)
             } else {
                 MiniWebPreviewFallback(tab = tab, isDark = isDark)
             }
@@ -1978,39 +1988,73 @@ private fun OverviewTabCard(
 }
 
 @Composable
-private fun MiniStartPagePreview(isPrivate: Boolean, isDark: Boolean) {
+private fun MiniStartPagePreview(
+    isPrivate: Boolean,
+    isDark: Boolean,
+    favorites: List<FavoriteItem> = emptyList(),
+) {
     val bg = if (isPrivate) Color(0xFF1B1C21) else if (isDark) Color(0xFF161A24) else Color(0xFFF1F4FA)
+    val surfaceBar = if (isDark || isPrivate) Color.White.copy(alpha = 0.08f) else Color.White
+    val mutedInk = if (isPrivate || isDark) Color.White.copy(alpha = 0.45f) else Color(0xFF8E8E93)
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(bg)
             .padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+        verticalArrangement = if (favorites.isEmpty()) Arrangement.Center else Arrangement.spacedBy(10.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Spacer(Modifier.height(6.dp))
-        MiniStartPageTileRows.forEach { row ->
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(7.dp),
+        if (favorites.isEmpty()) {
+            Box(
+                modifier = Modifier
+                    .size(34.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(surfaceBar),
+                contentAlignment = Alignment.Center,
             ) {
-                row.forEach { argb ->
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .aspectRatio(1f)
-                            .clip(MiniStartTileShape)
-                            .background(Color(argb)),
-                    )
+                if (isPrivate) {
+                    SafariPrivateMaskIcon(color = mutedInk, modifier = Modifier.size(18.dp))
+                } else {
+                    SafariCompassIcon(color = OverviewAccentBlue, modifier = Modifier.size(18.dp))
                 }
             }
+            Spacer(Modifier.height(10.dp))
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth(0.84f)
+                    .height(22.dp)
+                    .clip(MiniStartBarShape)
+                    .background(surfaceBar),
+            )
+        } else {
+            Spacer(Modifier.height(6.dp))
+            favorites.take(8).chunked(4).forEach { row ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(7.dp),
+                ) {
+                    row.forEach { fav ->
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .aspectRatio(1f)
+                                .clip(MiniStartTileShape)
+                                .background(Color(fav.colorArgb)),
+                        )
+                    }
+                    repeat(4 - row.size) {
+                        Spacer(Modifier.weight(1f))
+                    }
+                }
+            }
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(26.dp)
+                    .clip(MiniStartBarShape)
+                    .background(surfaceBar),
+            )
         }
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(26.dp)
-                .clip(MiniStartBarShape)
-                .background(if (isDark || isPrivate) Color.White.copy(alpha = 0.08f) else Color.White),
-        )
     }
 }
 

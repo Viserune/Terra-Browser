@@ -69,7 +69,8 @@ fun TerraWebViewHost(
             val target = pool.obtain(tab, appDark) { dy, scrollY ->
                 latestOnScrollDelta(dy, scrollY)
             }
-            val wasAlreadyAttached = target.parent === container &&
+            val wasAlreadyVisible = target.parent === container &&
+                target.visibility == View.VISIBLE &&
                 target.width > 0 &&
                 target.height > 0
 
@@ -135,15 +136,16 @@ fun TerraWebViewHost(
                     target.bringToFront()
                 }
             } else {
-                if (target.visibility != View.INVISIBLE) {
+                if (target.visibility == View.VISIBLE) {
                     pool.captureSnapshotBeforeHide(tab.id)
                     target.visibility = View.INVISIBLE
+                    target.onPause()
                 }
             }
 
-            if (wasAlreadyAttached) {
+            if (isVisible && wasAlreadyVisible) {
                 latestOnVisualReady?.invoke(tab.id)
-            } else {
+            } else if (isVisible) {
                 val expectedTabId = tab.id
                 val seq = ++visualSeq
                 target.post {
