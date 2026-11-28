@@ -37,9 +37,19 @@ android {
     }
 }
 
+val useLocalLiquidKit = providers.gradleProperty("localLiquidKitDir")
+    .orElse(providers.environmentVariable("LIQUIDKIT_KMP_DIR"))
+    .orNull
+    ?.let(::file)
+    ?.isDirectory == true
+
 dependencies {
-    implementation(libs.liquidkit.android)
-    implementation(libs.backdrop.android)
+    if (useLocalLiquidKit) {
+        implementation(libs.liquidkit.android)
+        implementation(libs.backdrop.android)
+    } else {
+        implementation(fileTree("libs") { include("*.aar") })
+    }
     implementation(libs.androidx.material.icons.extended)
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.core.ktx)

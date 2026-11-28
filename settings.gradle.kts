@@ -26,11 +26,18 @@ dependencyResolutionManagement {
 rootProject.name = "TerraBrowser"
 include(":app")
 
-includeBuild("/Users/stars/Documents/Android Liquid Glass/AndroidLiquidGlass-kmp") {
-    dependencySubstitution {
-        substitute(module("io.liquidkit:liquidkit-android")).using(project(":liquidkit"))
-        substitute(module("io.liquidkit:liquidkit")).using(project(":liquidkit"))
-        substitute(module("io.github.kyant0:backdrop-android")).using(project(":backdrop"))
-        substitute(module("io.github.kyant0:backdrop")).using(project(":backdrop"))
+val localLiquidKitDir = providers.gradleProperty("localLiquidKitDir")
+    .orElse(providers.environmentVariable("LIQUIDKIT_KMP_DIR"))
+    .orNull
+    ?.let(::file)
+    ?.takeIf { it.isDirectory }
+if (localLiquidKitDir != null) {
+    includeBuild(localLiquidKitDir) {
+        dependencySubstitution {
+            substitute(module("io.liquidkit:liquidkit-android")).using(project(":liquidkit"))
+            substitute(module("io.liquidkit:liquidkit")).using(project(":liquidkit"))
+            substitute(module("io.github.kyant0:backdrop-android")).using(project(":backdrop"))
+            substitute(module("io.github.kyant0:backdrop")).using(project(":backdrop"))
+        }
     }
 }
