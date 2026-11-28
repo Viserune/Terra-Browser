@@ -104,6 +104,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Density
@@ -161,9 +162,9 @@ internal fun safariMenuGlassTint(@Suppress("UNUSED_PARAMETER") isDark: Boolean):
     Color.Unspecified
 
 internal fun safariDockGlassTint(isDark: Boolean, isPrivate: Boolean): Color = when {
-    isPrivate -> Color(0xFF1D1F27).copy(alpha = 0.62f)
-    isDark -> Color(0xFF1B1D24).copy(alpha = 0.56f)
-    else -> Color(0xFFF6F7FB).copy(alpha = 0.42f)
+    isPrivate -> Color(0xFF1C1E26).copy(alpha = 0.72f)
+    isDark -> Color(0xFF1A1C23).copy(alpha = 0.66f)
+    else -> Color(0xFFF7F8FC).copy(alpha = 0.58f)
 }
 
 internal fun dynamicRoundedCornerShape(
@@ -868,9 +869,9 @@ fun SafariBottomDock(
     }
 
     val solidInnerPillColor = when {
-        state.activeGroup.isPrivate -> Color(0xFF23252C).copy(alpha = 0.72f)
-        isDark -> Color(0xFF282B34).copy(alpha = 0.52f)
-        else -> Color.Black.copy(alpha = 0.06f)
+        state.activeGroup.isPrivate -> Color(0xFF252832).copy(alpha = 0.76f)
+        isDark -> Color(0xFF2B2E38).copy(alpha = 0.58f)
+        else -> Color.Black.copy(alpha = 0.065f)
     }
 
     Box(
@@ -905,9 +906,9 @@ fun SafariBottomDock(
         val veilAlphaProvider: () -> Float = {
             val c = collapseState.value.coerceIn(0f, 1f)
             when {
-                layoutProfile == BrowserLayoutProfile.PHONE_LANDSCAPE -> lerp(0.86f, 0.42f, c)
+                layoutProfile == BrowserLayoutProfile.PHONE_LANDSCAPE -> lerp(0.88f, 0.62f, c)
                 state.tabBarMode == TabBarMode.TOP -> (1f - c * 1.4f).coerceIn(0f, 1f)
-                else -> lerp(1f, 0.48f, c)
+                else -> lerp(1f, 0.74f, c)
             }
         }
         val veilScaleYProvider: () -> Float = {
@@ -936,7 +937,7 @@ fun SafariBottomDock(
                     val padVPx = if (layoutProfile == BrowserLayoutProfile.PHONE_LANDSCAPE) {
                         lerp(6.dp.roundToPx(), 4.dp.roundToPx(), c)
                     } else {
-                        lerp(14.dp.roundToPx(), 8.dp.roundToPx(), c)
+                        lerp(12.dp.roundToPx(), 4.dp.roundToPx(), c)
                     }
                     val placeable = measurable.measure(constraints.copy(minHeight = 0))
                     layout(placeable.width, placeable.height + padVPx * 2) {
@@ -1207,9 +1208,9 @@ fun SafariBottomDock(
                             }
 
                             val fullCenterWidthPx = with(density) { (maxWidth - 116.dp).coerceAtLeast(160.dp).toPx() }
-                            val miniWidthPx = with(density) { (maxWidth * 0.56f).coerceAtLeast(156.dp).toPx() }
+                            val miniWidthPx = with(density) { (maxWidth * 0.50f).coerceAtLeast(164.dp).toPx() }
                             val fullCenterHeightPx = with(density) { 48.dp.toPx() }
-                            val miniHeightPx = with(density) { 36.dp.toPx() }
+                            val miniHeightPx = with(density) { 34.dp.toPx() }
                             val gapPx = with(density) { 12.dp.toPx() }
                             val currentStepPx: () -> Float = {
                                 val c = collapseState.value.coerceIn(0f, 1f)
@@ -1318,7 +1319,10 @@ fun SafariBottomDock(
                             contentAlignment = Alignment.BottomCenter,
                         ) {
                             val maxWidthPx = with(density) { maxWidth.toPx() }
-                            val miniOuterWidthPx = maxWidthPx * 0.56f
+                            val miniOuterWidthPx = maxOf(
+                                maxWidthPx * 0.50f,
+                                with(density) { 172.dp.toPx() },
+                            ).coerceAtMost(maxWidthPx)
                             val bottomDockChromeAlphaState = animateFloatAsState(
                                 targetValue = if (pageMenuState.expanded) 0f else 1f,
                                 animationSpec = LiquidKitSpring.swiftUI(0.22f, 0.9f).spec,
@@ -1326,7 +1330,7 @@ fun SafariBottomDock(
                             )
                             val dockCornerShape = remember(collapseState) {
                                 dynamicRoundedCornerShape {
-                                    lerp(30.dp.toPx(), 18.dp.toPx(), collapseState.value.coerceIn(0f, 1f))
+                                    lerp(30.dp.toPx(), 17.dp.toPx(), collapseState.value.coerceIn(0f, 1f))
                                 }
                             }
                             val innerTintAlphaProvider: () -> Float = {
@@ -1367,9 +1371,9 @@ fun SafariBottomDock(
                                     val padHFullPx = with(density) { 10.dp.toPx() }
                                     val padHMiniPx = with(density) { 5.dp.toPx() }
                                     val padVFullPx = with(density) { 8.dp.toPx() }
-                                    val padVMiniPx = with(density) { 3.dp.toPx() }
+                                    val padVMiniPx = with(density) { 2.dp.toPx() }
                                     val pillHFullPx = with(density) { 46.dp.toPx() }
-                                    val pillHMiniPx = with(density) { 36.dp.toPx() }
+                                    val pillHMiniPx = with(density) { 30.dp.toPx() }
                                     val spacingFullPx = with(density) { 7.dp.toPx() }
                                     val iconsHFullPx = with(density) { 42.dp.toPx() }
 
@@ -2281,6 +2285,7 @@ internal fun AddressPillSurface(
             items = pageMenuItems,
             backdrop = backdrop,
             presentation = LiquidKitMenuPresentation.ButtonTransform,
+            menuMaxHeight = 560.dp,
             modifier = Modifier.fillMaxSize(),
         ) {
             val holdScaleState = animateFloatAsState(
@@ -2551,9 +2556,17 @@ internal fun SafariBottomProgressiveBlur(
     val tintBrush = remember(isDark) {
         Brush.verticalGradient(
             0.00f to Color.Transparent,
-            0.26f to baseColor.copy(alpha = if (isDark) 0.24f else 0.20f),
-            0.60f to baseColor.copy(alpha = if (isDark) 0.56f else 0.50f),
-            1.00f to baseColor.copy(alpha = if (isDark) 0.80f else 0.74f),
+            0.26f to baseColor.copy(alpha = if (isDark) 0.28f else 0.26f),
+            0.62f to baseColor.copy(alpha = if (isDark) 0.66f else 0.62f),
+            1.00f to baseColor.copy(alpha = if (isDark) 0.88f else 0.86f),
+        )
+    }
+    val bottomFadeMask = remember {
+        Brush.verticalGradient(
+            0.00f to Color.Transparent,
+            0.26f to Color.Black.copy(alpha = 0.48f),
+            0.62f to Color.Black.copy(alpha = 0.94f),
+            1.00f to Color.Black,
         )
     }
     Box(
@@ -2575,10 +2588,20 @@ internal fun SafariBottomProgressiveBlur(
                 this.alpha = alphaProvider().coerceIn(0f, 1f)
                 scaleY = heightScaleProvider().coerceIn(0.05f, 1f)
                 transformOrigin = TransformOrigin(0.5f, 1f)
+                compositingStrategy = CompositingStrategy.Offscreen
             }
-            .drawBehind {
-                drawRect(brush = tintBrush)
-            },
+            .drawWithContent {
+                drawContent()
+                drawRect(brush = bottomFadeMask, blendMode = BlendMode.DstIn)
+            }
+            .drawBackdrop(
+                backdrop = backdrop,
+                shape = { RectangleShape },
+                effects = { blur(12.dp.toPx(), TileMode.Clamp) },
+                highlight = null,
+                shadow = null,
+                onDrawSurface = { drawRect(brush = tintBrush) },
+            ),
     )
 }
 
@@ -3261,6 +3284,19 @@ fun AddressEditingOverlay(
                                     ) { onSubmitInput(rs) }
                                 }
                             }
+                            if (state.favorites.isEmpty() && !(state.showRecentSearches && state.recentSearches.isNotEmpty())) {
+                                item("tab_empty_search_hint") {
+                                    AddressOverlayEmptyHint(
+                                        engineLabel = state.searchEngine.label,
+                                        ink = colors.ink,
+                                        secondary = colors.secondary,
+                                        accentBlue = accentBlue,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(vertical = 24.dp, horizontal = 16.dp),
+                                    )
+                                }
+                            }
                         } else {
                             items(matchedOpenTabs, key = { "tab_open_${it.id}" }) { openTab ->
                                 val grpName = state.tabGroups.firstOrNull { it.id == openTab.groupId }?.name ?: "标签页"
@@ -3460,6 +3496,19 @@ fun AddressEditingOverlay(
                             }
                         }
                     }
+                    if (state.favorites.isEmpty() && !(state.showRecentSearches && state.recentSearches.isNotEmpty())) {
+                        item("empty_search_hint") {
+                            AddressOverlayEmptyHint(
+                                engineLabel = state.searchEngine.label,
+                                ink = colors.ink,
+                                secondary = colors.secondary,
+                                accentBlue = accentBlue,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(top = 72.dp, start = 24.dp, end = 24.dp),
+                            )
+                        }
+                    }
                 } else {
                     items(matchedOpenTabs, key = { "open_tab_${it.id}" }) { openTab ->
                         val grpName = state.tabGroups.firstOrNull { it.id == openTab.groupId }?.name ?: "标签页"
@@ -3649,6 +3698,52 @@ fun AddressEditingOverlay(
 }
 
 @Composable
+private fun AddressOverlayEmptyHint(
+    engineLabel: String,
+    ink: Color,
+    secondary: Color,
+    accentBlue: Color,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier,
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Box(
+            modifier = Modifier
+                .size(44.dp)
+                .clip(RoundedCornerShape(14.dp))
+                .background(accentBlue.copy(alpha = 0.12f)),
+            contentAlignment = Alignment.Center,
+        ) {
+            TerraSymbolIcon(
+                symbol = LiquidKitSymbol.Search,
+                tint = accentBlue,
+                modifier = Modifier.size(20.dp),
+            )
+        }
+        BasicText(
+            text = "搜索或输入网站名称",
+            style = TextStyle(
+                color = ink,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.SemiBold,
+                textAlign = TextAlign.Center,
+            ),
+        )
+        BasicText(
+            text = "当前使用「$engineLabel」· 点击上方标签可切换搜索引擎",
+            style = TextStyle(
+                color = secondary,
+                fontSize = 13.sp,
+                textAlign = TextAlign.Center,
+            ),
+        )
+    }
+}
+
+@Composable
 private fun SuggestionRow(
     icon: LiquidKitSymbol,
     title: String,
@@ -3765,7 +3860,7 @@ internal fun buildPageMenuItems(
                 LiquidKitMenuItem(
                     key = "hide_toolbar",
                     title = "隐藏工具栏",
-                    symbol = LiquidKitSymbol.ListBulletRectangle,
+                    symbol = LiquidKitSymbol.ChevronDown,
                 ),
             )
             "desktop" -> list.add(
@@ -3864,7 +3959,7 @@ internal fun buildPageMenuItems(
             key = "open_settings",
             title = "浏览器设置",
             subtitle = "标签页栏：${state.tabBarMode.label}",
-            symbol = LiquidKitSymbol.SliderHorizontal,
+            symbol = LiquidKitSymbol.Gear,
             startsSection = true,
         ),
     )

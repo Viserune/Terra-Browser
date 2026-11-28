@@ -49,6 +49,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -196,7 +197,14 @@ fun SafariModalsHost(
                 when (selectedLibTab) {
                     LibraryTab.BOOKMARKS -> {
                         if (state.bookmarks.isEmpty()) {
-                            EmptyLibraryNote("暂无书签", colors.secondary)
+                            EmptyLibraryNote(
+                                title = "暂无书签",
+                                subtitle = "点击底栏分享或页面菜单可将网页加入书签",
+                                symbol = LiquidKitSymbol.Bookmark,
+                                ink = colors.ink,
+                                secondary = colors.secondary,
+                                accentBlue = accentBlue,
+                            )
                         } else {
                             state.bookmarks.forEach { bm ->
                                 key(bm.id) {
@@ -230,7 +238,14 @@ fun SafariModalsHost(
                     }
                     LibraryTab.READING_LIST -> {
                         if (state.readingList.isEmpty()) {
-                            EmptyLibraryNote("暂无阅读列表项目", colors.secondary)
+                            EmptyLibraryNote(
+                                title = "暂无阅读列表项目",
+                                subtitle = "将长篇文章加入阅读列表，方便随时离线阅读",
+                                symbol = LiquidKitSymbol.Document,
+                                ink = colors.ink,
+                                secondary = colors.secondary,
+                                accentBlue = accentBlue,
+                            )
                         } else {
                             state.readingList.forEach { item ->
                                 key(item.id) {
@@ -289,7 +304,14 @@ fun SafariModalsHost(
                             }
                         }
                         if (state.history.isEmpty()) {
-                            EmptyLibraryNote("暂无浏览历史", colors.secondary)
+                            EmptyLibraryNote(
+                                title = "暂无浏览历史",
+                                subtitle = "你访问过的网页会按时间顺序显示在这里",
+                                symbol = LiquidKitSymbol.HistoryClock,
+                                ink = colors.ink,
+                                secondary = colors.secondary,
+                                accentBlue = accentBlue,
+                            )
                         } else {
                             val visibleHistory = if (showAllHistory || state.history.size <= 25) {
                                 state.history
@@ -377,8 +399,12 @@ fun SafariModalsHost(
                         }
                         if (downloadsList.isEmpty()) {
                             EmptyLibraryNote(
-                                if (isPrivate) "当前无痕会话暂无下载项" else "暂无下载记录",
-                                colors.secondary,
+                                title = if (isPrivate) "当前无痕会话暂无下载项" else "暂无下载记录",
+                                subtitle = "网页中下载的文件会显示在此处",
+                                symbol = LiquidKitSymbol.Download,
+                                ink = colors.ink,
+                                secondary = colors.secondary,
+                                accentBlue = accentBlue,
                             )
                         } else {
                             downloadsList.forEach { dl ->
@@ -521,10 +547,11 @@ fun SafariModalsHost(
                 ) {
                     ShareActionTile(
                         title = "阅读列表",
-                        symbol = LiquidKitSymbol.Star,
+                        symbol = LiquidKitSymbol.Document,
                         ink = colors.ink,
                         isDark = isDark,
                         enabled = !isStart,
+                        iconContent = { SafariReadingGlassesIcon(color = colors.ink, modifier = Modifier.size(21.dp)) },
                         modifier = Modifier.weight(1f),
                     ) {
                         state.addReadingList(shareTitle, shareUrl)
@@ -1163,6 +1190,7 @@ private fun ShareActionTile(
     isDark: Boolean,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
+    iconContent: (@Composable () -> Unit)? = null,
     onClick: () -> Unit,
 ) {
     Column(
@@ -1181,7 +1209,11 @@ private fun ShareActionTile(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        TerraSymbolIcon(symbol = symbol, tint = ink, modifier = Modifier.size(20.dp))
+        if (iconContent != null) {
+            iconContent()
+        } else {
+            TerraSymbolIcon(symbol = symbol, tint = ink, modifier = Modifier.size(20.dp))
+        }
         BasicText(
             text = title,
             style = TextStyle(color = ink, fontSize = 12.sp, fontWeight = FontWeight.Medium),
@@ -1223,16 +1255,50 @@ private fun ContextMenuOptionRow(
 }
 
 @Composable
-private fun EmptyLibraryNote(text: String, secondary: Color) {
-    Box(
+private fun EmptyLibraryNote(
+    title: String,
+    subtitle: String,
+    symbol: LiquidKitSymbol,
+    ink: Color,
+    secondary: Color,
+    accentBlue: Color,
+) {
+    Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 28.dp),
-        contentAlignment = Alignment.Center,
+            .padding(vertical = 48.dp, horizontal = 24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
+        Box(
+            modifier = Modifier
+                .size(46.dp)
+                .clip(RoundedCornerShape(14.dp))
+                .background(accentBlue.copy(alpha = 0.12f)),
+            contentAlignment = Alignment.Center,
+        ) {
+            TerraSymbolIcon(
+                symbol = symbol,
+                tint = accentBlue,
+                modifier = Modifier.size(21.dp),
+            )
+        }
         BasicText(
-            text = text,
-            style = TextStyle(color = secondary, fontSize = 14.sp),
+            text = title,
+            style = TextStyle(
+                color = ink,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.SemiBold,
+                textAlign = TextAlign.Center,
+            ),
+        )
+        BasicText(
+            text = subtitle,
+            style = TextStyle(
+                color = secondary,
+                fontSize = 13.sp,
+                textAlign = TextAlign.Center,
+            ),
         )
     }
 }

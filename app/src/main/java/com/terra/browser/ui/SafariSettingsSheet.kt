@@ -125,6 +125,9 @@ fun SafariSettingsSheet(
         val listState = rememberLazyListState()
         val sheetContext = LocalLiquidKitSheetContext.current
         val isRoot = route == SettingsRoute.ROOT
+        BackHandler(enabled = !confirmClearData && !isRoot) {
+            navState.pop()
+        }
         val scaffoldColors = colors.copy(background = sheetBg)
 
         LiquidKitNavigationScaffold(
@@ -410,7 +413,7 @@ private fun SearchAndStartPage(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(18.dp),
     ) {
-        LiquidKitListSection(title = "搜索引擎") {
+        LiquidKitListSection(title = "搜索") {
             navigationRow(
                 title = "搜索引擎",
                 leading = LiquidKitSymbol.Search,
@@ -466,7 +469,6 @@ private fun SearchEngineSelectionPage(
                 row(
                     inset = true,
                     separatorStart = 16.dp,
-                    selected = selected,
                     onClick = { state.selectSearchEngine(engine) },
                 ) {
                     Row(
@@ -501,7 +503,6 @@ private fun SearchEngineSelectionPage(
                 row(
                     inset = true,
                     separatorStart = 16.dp,
-                    selected = selected,
                     onClick = { state.selectSearchEngine(engine) },
                 ) {
                     Row(

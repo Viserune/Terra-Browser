@@ -67,6 +67,7 @@ import io.liquidkit.LiquidKitMenuItem
 import io.liquidkit.LiquidKitPressButton
 import io.liquidkit.LiquidKitSymbol
 import io.liquidkit.LiquidKitText
+import io.liquidkit.LiquidKitTheme
 import io.liquidkit.liquidKitAppearance
 import io.liquidkit.liquidKitBackdrop
 import io.liquidkit.liquidKitColors
@@ -477,7 +478,11 @@ fun StartPage(
                         )
                     }
                     BasicText(
-                        text = "过去 7 天中，Terra Browser 阻止了 ${state.totalTrackersBlocked} 个追踪器剖析你的信息。",
+                        text = if (state.totalTrackersBlocked == 0) {
+                            "过去 7 天中，尚未检测到已知的跨站追踪器。"
+                        } else {
+                            "过去 7 天中，已阻止 ${state.totalTrackersBlocked} 个追踪器收集你的信息。"
+                        },
                         style = TextStyle(color = secondaryInk, fontSize = 13.sp, lineHeight = 18.sp),
                         modifier = Modifier.weight(1f),
                     )
@@ -588,21 +593,26 @@ fun StartPage(
                 modifier = contentConstraint,
                 contentAlignment = Alignment.Center,
             ) {
-                LiquidKitButton(
-                    onClick = onOpenSettings,
-                    backdrop = startBackdrop,
-                    height = 40.dp,
-                    contentPadding = PaddingValues(horizontal = 18.dp),
+                LiquidKitTheme(
+                    opacity = liquidKitAppearance().opacity,
+                    dark = isDark || isPrivate,
                 ) {
-                    TerraSymbolIcon(
-                        symbol = LiquidKitSymbol.SliderHorizontal,
-                        tint = primaryInk,
-                        modifier = Modifier.size(16.dp),
-                    )
-                    BasicText(
-                        text = "自定义与浏览器设置",
-                        style = TextStyle(color = primaryInk, fontSize = 13.5.sp, fontWeight = FontWeight.Medium),
-                    )
+                    LiquidKitButton(
+                        onClick = onOpenSettings,
+                        backdrop = startBackdrop,
+                        height = 40.dp,
+                        contentPadding = PaddingValues(horizontal = 18.dp),
+                    ) {
+                        TerraSymbolIcon(
+                            symbol = LiquidKitSymbol.SliderHorizontal,
+                            tint = primaryInk,
+                            modifier = Modifier.size(16.dp),
+                        )
+                        BasicText(
+                            text = "自定义与浏览器设置",
+                            style = TextStyle(color = primaryInk, fontSize = 13.5.sp, fontWeight = FontWeight.Medium),
+                        )
+                    }
                 }
             }
         }

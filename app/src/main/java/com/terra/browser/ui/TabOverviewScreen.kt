@@ -164,9 +164,6 @@ private val OverviewCardShape = RoundedCornerShape(18.dp)
 private val OverviewFaviconShape = RoundedCornerShape(4.dp)
 private val OverviewPillShape = RoundedCornerShape(26.dp)
 private val OverviewMenuShape = RoundedCornerShape(30.dp)
-private val OverviewCardBottomScrimBrush = Brush.verticalGradient(
-    listOf(Color.Transparent, Color.Black.copy(alpha = 0.28f)),
-)
 private val MiniStartTileShape = RoundedCornerShape(6.dp)
 private val MiniStartBarShape = RoundedCornerShape(8.dp)
 private val MiniWebLineShape = RoundedCornerShape(4.dp)
@@ -1917,14 +1914,6 @@ private fun OverviewTabCard(
             } else {
                 MiniWebPreviewFallback(tab = tab, isDark = isDark)
             }
-
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(44.dp)
-                    .align(Alignment.BottomCenter)
-                    .background(OverviewCardBottomScrimBrush),
-            )
 
             if (isSelectionMode) {
                 Box(

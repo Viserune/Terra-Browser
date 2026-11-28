@@ -49,6 +49,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.TextStyle
@@ -68,6 +69,8 @@ import io.liquidkit.LiquidKitControlSize
 import io.liquidkit.LiquidKitGlassSurface
 import io.liquidkit.LiquidKitIconButton
 import io.liquidkit.LiquidKitSymbol
+import io.liquidkit.LiquidKitTheme
+import io.liquidkit.liquidKitAppearance
 import org.json.JSONObject
 
 enum class ReaderTheme(
@@ -320,6 +323,15 @@ fun SafariReaderOverlay(
     val resolvedTone = readerStyle.theme.resolve(appDark)
     val paperColor = Color(AndroidColor.parseColor(resolvedTone.paperHex))
     val inkColor = Color(AndroidColor.parseColor(resolvedTone.inkHex))
+    val isDarkPaper = resolvedTone == ReaderTheme.GRAY || resolvedTone == ReaderTheme.BLACK
+    val bottomScrimBrush = remember(paperColor) {
+        Brush.verticalGradient(
+            0.00f to Color.Transparent,
+            0.35f to paperColor.copy(alpha = 0.84f),
+            0.72f to paperColor,
+            1.00f to paperColor,
+        )
+    }
     val readerBackdrop = rememberSolidColorBackdrop(paperColor)
     val accentBlue = Color(0xFF0A84FF)
     var activePanel by remember { mutableStateOf("") } // "" | "options" | "chapters"
@@ -366,71 +378,76 @@ fun SafariReaderOverlay(
         )
 
         // Expanded Reader Options or Chapters Glass Card
-        AnimatedVisibility(
-            visible = activePanel.isNotEmpty(),
-            enter = fadeIn(tween(150)),
-            exit = fadeOut(tween(120)),
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .navigationBarsPadding()
-                .displayCutoutPadding()
-                .padding(horizontal = 18.dp, vertical = 78.dp),
+        LiquidKitTheme(
+            opacity = liquidKitAppearance().opacity,
+            dark = isDarkPaper,
         ) {
-            LiquidKitGlassSurface(
-                backdrop = readerBackdrop,
-                shape = RoundedCornerShape(24.dp),
-                tint = paperColor.copy(alpha = 0.94f),
+            AnimatedVisibility(
+                visible = activePanel.isNotEmpty(),
+                enter = fadeIn(tween(150)),
+                exit = fadeOut(tween(120)),
                 modifier = Modifier
-                    .widthIn(max = 460.dp)
-                    .fillMaxWidth()
-                    .border(0.75.dp, inkColor.copy(alpha = 0.14f), RoundedCornerShape(24.dp)),
+                    .align(Alignment.BottomCenter)
+                    .navigationBarsPadding()
+                    .displayCutoutPadding()
+                    .padding(horizontal = 18.dp, vertical = 78.dp),
             ) {
-                Box(modifier = Modifier.padding(16.dp)) {
-                    if (activePanel == "options") {
-                        ReaderOptionsPanel(
-                            style = readerStyle,
-                            ink = inkColor,
-                            accentBlue = accentBlue,
-                            backdrop = readerBackdrop,
-                            onChange = onUpdateStyle,
-                        )
-                    } else if (activePanel == "chapters") {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .heightIn(max = 320.dp),
-                            verticalArrangement = Arrangement.spacedBy(6.dp),
-                        ) {
-                            BasicText(
-                                text = "目录 (${article.chapters.size})",
-                                style = TextStyle(color = inkColor.copy(alpha = 0.7f), fontSize = 13.sp, fontWeight = FontWeight.SemiBold),
+                LiquidKitGlassSurface(
+                    backdrop = readerBackdrop,
+                    shape = RoundedCornerShape(24.dp),
+                    tint = paperColor.copy(alpha = 0.94f),
+                    modifier = Modifier
+                        .widthIn(max = 460.dp)
+                        .fillMaxWidth()
+                        .border(0.75.dp, inkColor.copy(alpha = 0.14f), RoundedCornerShape(24.dp)),
+                ) {
+                    Box(modifier = Modifier.padding(16.dp)) {
+                        if (activePanel == "options") {
+                            ReaderOptionsPanel(
+                                style = readerStyle,
+                                ink = inkColor,
+                                accentBlue = accentBlue,
+                                backdrop = readerBackdrop,
+                                onChange = onUpdateStyle,
                             )
-                            LazyColumn(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                                items(article.chapters, key = { it.id }) { chapter ->
-                                    Box(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .clip(RoundedCornerShape(10.dp))
-                                            .clickable(
-                                                interactionSource = remember { MutableInteractionSource() },
-                                                indication = null,
-                                            ) {
-                                                activePanel = ""
-                                                readerWebView?.scrollToChapter(chapter.id)
-                                            }
-                                            .padding(
-                                                start = if (chapter.level >= 3) 20.dp else 8.dp,
-                                                end = 8.dp,
-                                                top = 8.dp,
-                                                bottom = 8.dp,
-                                            ),
-                                    ) {
-                                        BasicText(
-                                            text = chapter.title,
-                                            maxLines = 2,
-                                            overflow = TextOverflow.Ellipsis,
-                                            style = TextStyle(color = inkColor, fontSize = 15.sp, fontWeight = FontWeight.Medium),
-                                        )
+                        } else if (activePanel == "chapters") {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .heightIn(max = 320.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp),
+                            ) {
+                                BasicText(
+                                    text = "目录 (${article.chapters.size})",
+                                    style = TextStyle(color = inkColor.copy(alpha = 0.7f), fontSize = 13.sp, fontWeight = FontWeight.SemiBold),
+                                )
+                                LazyColumn(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                    items(article.chapters, key = { it.id }) { chapter ->
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .clip(RoundedCornerShape(10.dp))
+                                                .clickable(
+                                                    interactionSource = remember { MutableInteractionSource() },
+                                                    indication = null,
+                                                ) {
+                                                    activePanel = ""
+                                                    readerWebView?.scrollToChapter(chapter.id)
+                                                }
+                                                .padding(
+                                                    start = if (chapter.level >= 3) 20.dp else 8.dp,
+                                                    end = 8.dp,
+                                                    top = 8.dp,
+                                                    bottom = 8.dp,
+                                                ),
+                                        ) {
+                                            BasicText(
+                                                text = chapter.title,
+                                                maxLines = 2,
+                                                overflow = TextOverflow.Ellipsis,
+                                                style = TextStyle(color = inkColor, fontSize = 15.sp, fontWeight = FontWeight.Medium),
+                                            )
+                                        }
                                     }
                                 }
                             }
@@ -440,75 +457,88 @@ fun SafariReaderOverlay(
             }
         }
 
-        // Bottom Safari Reader Control Pill
-        Row(
+        Box(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
-                .navigationBarsPadding()
-                .displayCutoutPadding()
-                .padding(horizontal = 16.dp, vertical = 14.dp),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            verticalAlignment = Alignment.CenterVertically,
+                .fillMaxWidth()
+                .height(116.dp)
+                .background(bottomScrimBrush),
+        )
+
+        // Bottom Safari Reader Control Pill
+        LiquidKitTheme(
+            opacity = liquidKitAppearance().opacity,
+            dark = isDarkPaper,
         ) {
-            LiquidKitIconButton(
-                onClick = onClose,
-                backdrop = readerBackdrop,
-                size = 46.dp,
-            ) {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    TerraSymbolIcon(symbol = LiquidKitSymbol.Close, tint = inkColor, modifier = Modifier.size(18.dp))
-                }
-            }
-
-            LiquidKitGlassSurface(
-                backdrop = readerBackdrop,
-                shape = CircleShape,
-                tint = inkColor.copy(alpha = 0.08f),
+            Row(
                 modifier = Modifier
-                    .height(46.dp)
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null,
-                    ) {
-                        activePanel = if (activePanel == "options") "" else "options"
-                    },
+                    .align(Alignment.BottomCenter)
+                    .navigationBarsPadding()
+                    .displayCutoutPadding()
+                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    SafariReadingGlassesIcon(color = inkColor, modifier = Modifier.size(18.dp))
-                    BasicText(
-                        text = tab.host.ifBlank { "阅读器视图" },
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        style = TextStyle(color = inkColor, fontSize = 14.sp, fontWeight = FontWeight.SemiBold),
-                        modifier = Modifier.widthIn(max = 180.dp),
-                    )
-                    BasicText(
-                        text = "Aa",
-                        style = TextStyle(
-                            color = if (activePanel == "options") accentBlue else inkColor.copy(alpha = 0.78f),
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Bold,
-                        ),
-                    )
-                }
-            }
-
-            if (article.chapters.isNotEmpty()) {
                 LiquidKitIconButton(
-                    onClick = { activePanel = if (activePanel == "chapters") "" else "chapters" },
+                    onClick = onClose,
                     backdrop = readerBackdrop,
                     size = 46.dp,
                 ) {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        TerraSymbolIcon(
-                            symbol = LiquidKitSymbol.List,
-                            tint = if (activePanel == "chapters") accentBlue else inkColor,
-                            modifier = Modifier.size(18.dp),
+                        TerraSymbolIcon(symbol = LiquidKitSymbol.Close, tint = inkColor, modifier = Modifier.size(18.dp))
+                    }
+                }
+
+                LiquidKitGlassSurface(
+                    backdrop = readerBackdrop,
+                    shape = CircleShape,
+                    tint = inkColor.copy(alpha = 0.08f),
+                    modifier = Modifier
+                        .height(46.dp)
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                        ) {
+                            activePanel = if (activePanel == "options") "" else "options"
+                        },
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        SafariReadingGlassesIcon(color = inkColor, modifier = Modifier.size(18.dp))
+                        BasicText(
+                            text = tab.host.ifBlank { "阅读器视图" },
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            style = TextStyle(color = inkColor, fontSize = 14.sp, fontWeight = FontWeight.SemiBold),
+                            modifier = Modifier.widthIn(max = 180.dp),
                         )
+                        BasicText(
+                            text = "Aa",
+                            style = TextStyle(
+                                color = if (activePanel == "options") accentBlue else inkColor.copy(alpha = 0.78f),
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold,
+                            ),
+                        )
+                    }
+                }
+
+                if (article.chapters.isNotEmpty()) {
+                    LiquidKitIconButton(
+                        onClick = { activePanel = if (activePanel == "chapters") "" else "chapters" },
+                        backdrop = readerBackdrop,
+                        size = 46.dp,
+                    ) {
+                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            TerraSymbolIcon(
+                                symbol = LiquidKitSymbol.List,
+                                tint = if (activePanel == "chapters") accentBlue else inkColor,
+                                modifier = Modifier.size(18.dp),
+                            )
+                        }
                     }
                 }
             }

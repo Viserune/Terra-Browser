@@ -1492,9 +1492,17 @@ private fun BoxScope.TopProgressiveVeilHost(
     val baseColor = if (isDark) Color(0xFF0A0C10) else Color.White
     val tintBrush = remember(isDark) {
         Brush.verticalGradient(
-            0.00f to baseColor.copy(alpha = if (isDark) 0.72f else 0.74f),
-            0.32f to baseColor.copy(alpha = if (isDark) 0.42f else 0.44f),
-            0.65f to baseColor.copy(alpha = if (isDark) 0.14f else 0.14f),
+            0.00f to baseColor.copy(alpha = if (isDark) 0.82f else 0.86f),
+            0.45f to baseColor.copy(alpha = if (isDark) 0.56f else 0.60f),
+            0.78f to baseColor.copy(alpha = if (isDark) 0.22f else 0.24f),
+            1.00f to Color.Transparent,
+        )
+    }
+    val topFadeMask = remember {
+        Brush.verticalGradient(
+            0.00f to Color.Black,
+            0.52f to Color.Black.copy(alpha = 0.96f),
+            0.78f to Color.Black.copy(alpha = 0.45f),
             1.00f to Color.Transparent,
         )
     }
@@ -1512,9 +1520,9 @@ private fun BoxScope.TopProgressiveVeilHost(
         (intrusionFraction * dockVisibleAlpha * overviewFade * dragFade).coerceIn(0f, 1f)
     }
     val featherHeight = if (tabBarMode == TabBarMode.TOP && !isToolbarHidden && layoutProfile != BrowserLayoutProfile.PHONE_LANDSCAPE) {
-        statusBarTopDp + topBarExtra + 22.dp
+        statusBarTopDp + topBarExtra + 26.dp
     } else {
-        statusBarTopDp + 28.dp
+        statusBarTopDp + 34.dp
     }
 
     Box(
@@ -1534,10 +1542,20 @@ private fun BoxScope.TopProgressiveVeilHost(
             }
             .graphicsLayer {
                 this.alpha = alphaProvider()
+                compositingStrategy = CompositingStrategy.Offscreen
             }
-            .drawBehind {
-                drawRect(brush = tintBrush)
-            },
+            .drawWithContent {
+                drawContent()
+                drawRect(brush = topFadeMask, blendMode = BlendMode.DstIn)
+            }
+            .drawBackdrop(
+                backdrop = pageBackdrop,
+                shape = { RectangleShape },
+                effects = { blur(14.dp.toPx(), TileMode.Clamp) },
+                highlight = null,
+                shadow = null,
+                onDrawSurface = { drawRect(brush = tintBrush) },
+            ),
     )
 }
 
