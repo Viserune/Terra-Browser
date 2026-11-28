@@ -128,6 +128,13 @@ internal object BrowserLibrary {
     }
     val closedTabs = ClosedTabs()
     var engine by mutableStateOf("Bing")
+    var phoneTabLayout by mutableStateOf(PhoneTabLayout.Compact)
+        private set
+
+    fun setPhoneLayout(layout: PhoneTabLayout) {
+        phoneTabLayout = layout
+        store.edit().putString("phoneTabLayout", layout.name).apply()
+    }
     var showPreviews by mutableStateOf(true)
     var readerStyle by mutableStateOf(ReaderStyle())
         private set
@@ -143,6 +150,11 @@ internal object BrowserLibrary {
         window.windowId?.let(launching::remove)
         if (::store.isInitialized) return
         store = window.getSharedPreferences("terra", Context.MODE_PRIVATE)
+        val savedLayout = store.getString("phoneTabLayout", null)
+        val previousInstallation = store.contains("tabs") || store.contains("bookmarks") || store.contains("engine")
+        val fallbackLayout = if (previousInstallation) PhoneTabLayout.Bottom else PhoneTabLayout.Compact
+        phoneTabLayout = PhoneTabLayout.entries.firstOrNull { it.name == savedLayout } ?: fallbackLayout
+        if (savedLayout != phoneTabLayout.name) setPhoneLayout(phoneTabLayout)
         fun read(key: String) = runCatching {
             val rows = JSONArray(store.getString(key, "[]"))
             List(rows.length()) { i -> rows.getJSONArray(i).let { Site(it.getString(0), it.getString(1)) } }

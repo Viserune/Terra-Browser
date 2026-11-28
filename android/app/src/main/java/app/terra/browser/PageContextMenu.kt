@@ -32,11 +32,12 @@ private fun MainActivity.showAnchoredActions(
     isCurrent: () -> Boolean,
     previewUrl: String? = null,
     source: WebView? = null,
+    longPress: Boolean = true,
     populate: MutableList<MenuEntry>.() -> Unit
 ) {
     if (!isCurrent()) return
     val items = buildList(populate)
-    window.decorView.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+    if (longPress) window.decorView.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
     contextMenu = ContextMenu(screenX, screenY, previewUrl, source, items, isCurrent)
 }
 
@@ -88,6 +89,27 @@ internal fun MainActivity.showTabActions(tab: Page, x: Int, y: Int) {
         if (!tab.secret && recentlyClosed.isNotEmpty()) item("最近关闭") { sheet = "最近关闭" }
         item("关闭标签页") { close(tab) }
         if (windowId != null) item("关闭窗口") { finishAndRemoveTask() }
+    }
+}
+
+internal fun MainActivity.showCompactMore(tab: Page, x: Int, y: Int, held: Boolean) {
+    showAnchoredActions(x, y, {
+        !isFinishing && !isDestroyed && page === tab && sheet.isEmpty() &&
+            BrowserLibrary.phoneTabLayout == PhoneTabLayout.Compact
+    }, longPress = held) {
+        item("所有标签页") { sheet = "标签页" }
+        item("新建标签页") {
+            add(false)
+            if (page !== tab) sheet = "地址"
+        }
+        item("新建无痕标签页") {
+            add(true)
+            if (page !== tab) sheet = "地址"
+        }
+        item("书签") { sheet = "书签" }
+        if (tab.url.isNotEmpty()) item("共享") { share(tab.url, tab.title) }
+        if (downloads.ids(tab.secret).isNotEmpty()) item("下载项目") { sheet = "下载项目" }
+        item("标签栏布局") { sheet = "标签栏布局" }
     }
 }
 

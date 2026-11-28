@@ -2,13 +2,14 @@
 
 Terra Browser 是一款面向 Android 手机和平板的浏览器，交互参考 iOS 和 iPadOS 上的 Safari。网页由 Android System WebView 渲染，工具栏和浮层通过 LiquidKit 取样下方页面，随滚动呈现折射、模糊与高光。
 
-**[下载 Android 1.36 体验版 APK](https://github.com/Viserune/Terra-Browser/releases/download/v1.36/Terra-Browser-1.36-Android.apk)** · [版本说明与源码包](https://github.com/Viserune/Terra-Browser/releases/tag/v1.36)
+**[下载 Android 1.37 体验版 APK](https://github.com/Viserune/Terra-Browser/releases/download/v1.37/Terra-Browser-1.37-Android.apk)** · [手机标签栏动画实录](https://github.com/Viserune/Terra-Browser/releases/download/v1.37/Terra-Browser-1.37-Phone-Layouts.mp4) · [版本说明与源码包](https://github.com/Viserune/Terra-Browser/releases/tag/v1.37)
 
 支持 Android 10 及以上，完整的液态玻璃着色效果需要 Android 13 及以上。
 
 ## 浏览体验
 
-- **手机浏览**　从网页左边缘向右拖可返回，反方向可前进。手指停住时，当前网页仍会更新，往回拖可取消。底部地址栏支持左右切换标签、上划进入总览。地址栏和操作按钮分别读取下方网页的颜色，图标随背景切换深浅。
+- **手机标签栏**　从「页面菜单 → 标签栏布局」选择紧凑、底部或顶部。紧凑布局把后退、地址栏和更多放在同一排，有可前进的网页时，左侧按钮会展开。「更多」里可以打开所有标签页、书签和共享。底部布局使用双排工具栏，顶部布局把地址栏移到屏幕上方，常用操作留在拇指可及的底边。新安装默认紧凑，从旧版升级会保留底部布局。
+- **手机浏览**　从网页左边缘向右拖可返回，从右边缘向左拖可前进。手指停住时，当前网页仍会更新，往回拖可取消。左右划地址栏可切换标签，在底部地址栏上划可进入总览。滚动阅读时，地址栏会收成域名胶囊，轻点可展开。地址栏和操作按钮分别读取下方网页的颜色，图标随背景切换深浅。
 - **平板布局**　点顶部地址栏，输入框会从原位展开，显示个人收藏。开始输入后可以搜索或切换到已打开的标签。页面菜单从对应按钮展开，轻轻回弹后停住。
 - **标签总览**　平板上，当前网页连同工具栏一起缩进自己的预览卡，背景网格随之变清晰。点卡片可从原位展开网页。顶部的加号会展开新标签并聚焦地址栏，输入后出现建议。在 820 dp 宽的竖屏平板上，每行显示三张纵向预览，标题位于下方。
 - **侧栏**　按下侧栏按钮时，玻璃会随手指产生反馈。侧栏从屏幕边缘滑入，后方网页逐渐变暗。点空白处即可收回。

@@ -67,6 +67,9 @@ private fun symbol(label: String) = when (label) {
     "在新窗口中打开", "在新标签中打开", "在后台打开", "在新标签中查看图片" -> LiquidKitSymbol.SquareOnSquare
     "移至标签组" -> LiquidKitSymbol.SquareOnSquare
     "新建标签页" -> LiquidKitSymbol.Add
+    "所有标签页" -> LiquidKitSymbol.SquareOnSquare
+    "书签" -> LiquidKitSymbol.Bookmark
+    "标签栏布局" -> LiquidKitSymbol.SliderHorizontal
     "新建无痕标签页" -> LiquidKitSymbol.Moon
     "关闭窗口", "关闭标签页" -> LiquidKitSymbol.Close
     "添加书签" -> LiquidKitSymbol.Bookmark
@@ -78,7 +81,7 @@ private fun symbol(label: String) = when (label) {
     "复制地址", "复制图片地址", "复制网址" -> LiquidKitSymbol.Clipboard
     "编辑地址" -> LiquidKitSymbol.Rename
     "粘贴并前往" -> LiquidKitSymbol.Forward
-    "下载", "下载图片" -> LiquidKitSymbol.Download
+    "下载", "下载图片", "下载项目" -> LiquidKitSymbol.Download
     "共享", "共享图片地址" -> LiquidKitSymbol.Share
     else -> LiquidKitSymbol.Clock
 }

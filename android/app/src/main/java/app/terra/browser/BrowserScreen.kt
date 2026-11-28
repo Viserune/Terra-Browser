@@ -12,6 +12,8 @@ import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.MutableTransitionState
+import androidx.compose.animation.core.Transition
+import androidx.compose.animation.core.updateTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -150,7 +152,7 @@ private fun host(url: String) = Uri.parse(url).host.orEmpty()
         Accent provides if (dark) Color(0xff66adff) else Color(0xff0066cc)) {
         LiquidKitRoot(backgroundColor = ground, dark = dark) {
             val capture = remember { WebGlassCapture() }
-            var tabletAddress by remember { mutableStateOf<Rect?>(null) }
+            var addressAnchor by remember { mutableStateOf<Rect?>(null) }
             val tabletEditorBounds = remember { mutableStateOf<Rect?>(null) }
             var tabletPanelVisible by remember { mutableStateOf(false) }
             var inlineHomeAddress by remember { mutableStateOf(false) }
@@ -158,7 +160,7 @@ private fun host(url: String) = Uri.parse(url).host.orEmpty()
             val measureAddress = Modifier.onGloballyPositioned { layout ->
                 val origin = layout.localToScreen(Offset.Zero)
                 val end = layout.localToScreen(Offset(layout.size.width.toFloat(),layout.size.height.toFloat()))
-                if (origin.x.isFinite() && end.y.isFinite()) tabletAddress = Rect(origin,end)
+                if (origin.x.isFinite() && end.y.isFinite()) addressAnchor = Rect(origin,end)
             }
             val refresh = remember { PullRefresh() }
             val opening = a.openingPreview?.takeIf { it.page === p && it.url == p.url }
@@ -181,16 +183,32 @@ private fun host(url: String) = Uri.parse(url).host.orEmpty()
                     .then(if (editingTabletAddress && !inlineHomeAddress || tabletPanelVisible) Modifier.clearAndSetSemantics {} else Modifier)
                     .safeDrawingPadding().imePadding().clipToBounds()) {
                     val tablet = maxWidth >= 650.dp
+                    val phoneLayout = BrowserLibrary.phoneTabLayout
+                    val layoutTransition = updateTransition(phoneLayout, label = "手机标签栏布局")
                     val canFold = p.url.isNotBlank() && p.error.isEmpty() && a.sheet.isEmpty() &&
                         a.prompt == null && a.bookmarkDraft == null && !a.videoFullscreen
                     val compact by remember(p,canFold) { derivedStateOf { canFold && p.toolbarFold >= 1f } }
                     val compactClearance = with(LocalDensity.current) { (if (tablet) 44.dp else 52.dp).roundToPx() }
                     var toolbarHeight by remember { mutableIntStateOf(0) }
                     var dockHeight by remember { mutableIntStateOf(0) }
+                    val phonePanel = a.sheet == "查找" || a.sheet == "页面缩放"
+                    val phoneTop = when {
+                        phonePanel || phoneLayout != PhoneTabLayout.Top -> 0.dp
+                        compact -> 52.dp
+                        else -> 58.dp
+                    }
+                    val phoneBottom = when {
+                        compact && phoneLayout == PhoneTabLayout.Top -> 0.dp
+                        compact -> 52.dp
+                        phoneLayout == PhoneTabLayout.Bottom -> 110.dp
+                        else -> 56.dp
+                    }
+                    val phoneTopPx = with(LocalDensity.current) { phoneTop.roundToPx() }
+                    val phoneBottomPx = with(LocalDensity.current) { phoneBottom.roundToPx() }
                     Box(Modifier.fillMaxSize().background(ground)) {
                         if (p.url.isNotBlank() && opening == null) WebGlassScene(capture, Modifier.fillMaxSize().liquidKitBackdrop(scene))
                         if (p.url.isBlank()) Box(Modifier.fillMaxSize().liquidKitBackdrop(scene).padding(
-                            top = if (tablet) 115.dp else 0.dp, bottom = if (tablet) 0.dp else 116.dp
+                            top = if (tablet) 115.dp else phoneTop, bottom = if (tablet) 0.dp else phoneBottom
                         )) { Home(a) }
                         else if (!a.webReady) Box(Modifier.fillMaxSize(),contentAlignment=Alignment.Center) {
                             Label("正在准备浏览器…", 15, Muted.current)
@@ -198,11 +216,12 @@ private fun host(url: String) = Uri.parse(url).host.orEmpty()
                             onRelease = { it.release() }, update = {
                                 it.importantForAccessibility = if (editingTabletAddress || tabletPanelVisible)
                                     android.view.View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS else android.view.View.IMPORTANT_FOR_ACCESSIBILITY_AUTO
-                                it.topClearance = if (!tablet) 0 else if (compact) compactClearance else toolbarHeight
-                                it.bottomClearance = if (tablet) 0 else if (compact) compactClearance else dockHeight
+                                it.topClearance = if (!tablet) phoneTopPx else if (compact) compactClearance else toolbarHeight
+                                it.bottomClearance = if (tablet) 0 else if (phonePanel) dockHeight else phoneBottomPx
                                 it.display(a.browser(p))
                                 // LiquidKitSheet samples the modal host directly, including the live WebView.
-                                it.fullGlassScene = editingTabletAddress || tabletPanelVisible || a.contextMenu != null || a.sharedPage != null ||
+                                val movingDock = !tablet && layoutTransition.currentState != layoutTransition.targetState
+                                it.fullGlassScene = movingDock || editingTabletAddress || tabletPanelVisible || a.contextMenu != null || a.sharedPage != null ||
                                     (a.sheet.isNotEmpty() && !phoneLibrary && a.sheet != "阅读器") || a.prompt != null
                                 it.readingToolbar.bind(p.takeIf { canFold })
                                 refresh.bind(p.web.takeIf { canFold && opening == null && a.contextMenu == null })
@@ -217,18 +236,14 @@ private fun host(url: String) = Uri.parse(url).host.orEmpty()
                             Action(Icon.Reload, "重新载入") { p.error = ""; p.web?.reload() }
                         }
                     }
-                    RefreshIndicator(refresh,if (tablet) toolbarHeight else 0,Modifier.align(Alignment.TopCenter))
+                    RefreshIndicator(refresh,if (tablet) toolbarHeight else phoneTopPx,Modifier.align(Alignment.TopCenter))
                     val alignment = if (tablet) Alignment.TopCenter else Alignment.BottomCenter
                     fun fold() = if (canFold) p.toolbarFold else 0f
                     val showPill by remember(p,canFold) { derivedStateOf { fold() > .05f } }
                     val zoomOpen = a.sheet == "页面缩放"
                     val finding = a.sheet == "查找"
                     if (!zoomOpen && !finding && !tablet) {
-                        Column(Modifier.align(alignment).onSizeChanged {
-                            if (fold() == 0f) dockHeight = it.height
-                        }.padding(bottom=4.dp)) {
-                            Dock(a,capture,::fold)
-                        }
+                        Dock(a,capture,measureAddress,layoutTransition,::fold)
                     } else if (!zoomOpen && !finding && !compact) {
                         Column(Modifier.align(alignment).graphicsLayer {
                             val t = fold()
@@ -248,7 +263,9 @@ private fun host(url: String) = Uri.parse(url).host.orEmpty()
                     }
                     AnimatedVisibility(visible=zoomOpen,modifier=Modifier.align(alignment),
                         enter=fadeIn(tween(140)) + slideInVertically(tween(160)) { if (tablet) -it/2 else it/2 },
-                        exit=fadeOut(tween(100))) { ZoomToolbar(a) }
+                        exit=fadeOut(tween(100))) {
+                            Box(Modifier.onSizeChanged { if (!tablet && zoomOpen) dockHeight = it.height }) { ZoomToolbar(a) }
+                        }
                     if (!zoomOpen && tablet && showPill) {
                         val domain = addressLabel(p)
                         val restore = {
@@ -279,7 +296,7 @@ private fun host(url: String) = Uri.parse(url).host.orEmpty()
                 if (a.sheet == "下载项目") DownloadsPanel(a)
                 else if (phoneLibrary) PhoneLibrarySheet(a, a.sheet, recordLibrary)
                 else BrowserPanelWindow(a, recordLibrary, capture.takeIf { p.url.isNotBlank() && opening == null },
-                    tabletAddress, tabletEditorBounds, { inlineHomeAddress=it }) { tabletPanelVisible = it }
+                    addressAnchor, tabletEditorBounds, { inlineHomeAddress=it }) { tabletPanelVisible = it }
                 BookmarkEditor(a, overlayScene, editorVisibility)
                 CompositionLocalProvider(LocalLiquidKitBackdrop provides overlayScene) {
                     SharePanel(a, dark, capture.takeIf { !libraryOverlay && p.url.isNotBlank() && opening == null })
@@ -490,7 +507,7 @@ private fun tabletAddressWidth(viewport: Dp) = (viewport * .44f).coerceAtMost(56
 }
 
 @Composable private fun BrowserPanelWindow(a: MainActivity, recordLibrary: Modifier, capture: WebGlassCapture?,
-    tabletAddress: Rect?, tabletEditorBounds: MutableState<Rect?>, onInlineAddress: (Boolean) -> Unit,
+    addressAnchor: Rect?, tabletEditorBounds: MutableState<Rect?>, onInlineAddress: (Boolean) -> Unit,
     onTabletPanelVisible: (Boolean) -> Unit) {
     if (a.sheet == "页面缩放") return
     if (a.sheet == "标签页") {
@@ -519,7 +536,7 @@ private fun tabletAddressWidth(viewport: Dp) = (viewport * .44f).coerceAtMost(56
         AnimatedVisibility(visibleState = transition, enter = EnterTransition.None, exit = ExitTransition.None,
             modifier = Modifier.fillMaxSize().then(if (displayed=="地址") Modifier else Modifier.semantics { paneTitle=displayed })) {
             when (displayed) {
-                "地址" -> AddressEditor(a, capture, tabletAddress, tabletEditorBounds, onInlineAddress)
+                "地址" -> AddressEditor(a, capture, addressAnchor, tabletEditorBounds, onInlineAddress)
                 "页面菜单" -> PageMenu(a, capture)
                 else -> LibrarySidebar(a, displayed, recordLibrary, capture)
             }
@@ -536,9 +553,37 @@ private fun tabletAddressWidth(viewport: Dp) = (viewport * .44f).coerceAtMost(56
                 else fadeOut(tween(120)) + slideOutVertically(tween(150)) { it/12 }) {
             when (displayed) {
                 "页面菜单" -> PageMenu(a, capture)
-                "地址" -> AddressEditor(a, capture, tabletAddress, tabletEditorBounds, onInlineAddress)
+                "标签栏布局" -> PhoneLayoutPicker(a, capture)
+                "地址" -> AddressEditor(a, capture, addressAnchor, tabletEditorBounds, onInlineAddress)
                 "阅读器" -> a.page.readerArticle?.let { article -> key(article) { ReaderScreen(a, a.page, article) } }
                 else -> Panel(a, displayed)
+            }
+        }
+    }
+}
+
+@Composable private fun PhoneLayoutPicker(a: MainActivity, capture: WebGlassCapture?) {
+    val close = { a.sheet = "" }
+    val window = (LocalView.current.parent as? DialogWindowProvider)?.window
+    DisposableEffect(window) {
+        val previous = window?.attributes?.dimAmount
+        window?.setDimAmount(.20f)
+        onDispose { if (previous != null) window.setDimAmount(previous) }
+    }
+    Box(Modifier.fillMaxSize().safeDrawingPadding(), contentAlignment = Alignment.BottomCenter) {
+        Box(Modifier.matchParentSize().clickable(interactionSource=remember { MutableInteractionSource() },
+            indication=null, onClick=close))
+        DialogGlassSurface(capture, Modifier.padding(10.dp).widthIn(max = 460.dp).fillMaxWidth(),
+            shape=RoundedCornerShape(26.dp), tint=Card.current.copy(alpha=.72f), panelBlur=16.dp) {
+            Column(Modifier.padding(10.dp)) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment=Alignment.CenterVertically) {
+                    Box(Modifier.weight(1f).padding(start=12.dp)) { Label("标签栏布局",20,bold=true) }
+                    Tool(Icon.Close,"完成",size=44.dp,click=close)
+                }
+                PhoneLayoutChoices(Ink.current, Accent.current) {
+                    BrowserLibrary.setPhoneLayout(it)
+                    close()
+                }
             }
         }
     }
@@ -589,10 +634,11 @@ private fun tabletAddressWidth(viewport: Dp) = (viewport * .44f).coerceAtMost(56
             val y = with(density) { ((anchor?.y ?: origin.y)-origin.y).toDp() }
             val left = (x-42.dp).coerceIn(0.dp,maxWidth-menuWidth)
             val top = (y+4.dp).coerceIn(0.dp,(maxHeight-160.dp).coerceAtLeast(0.dp))
-            val position = if (tablet) Modifier.align(Alignment.TopStart).offset(x=left,y=top)
+            val fromTop = tablet || BrowserLibrary.phoneTabLayout == PhoneTabLayout.Top
+            val position = if (fromTop) Modifier.align(Alignment.TopStart).offset(x=left,y=top)
                 else Modifier.align(Alignment.BottomCenter)
             Box(Modifier.matchParentSize().onGloballyPositioned { origin = it.localToScreen(Offset.Zero) })
-            val motion = if (tablet) {
+            val motion = if (fromTop) {
                 val progress = transition.animateFloat(transitionSpec = {
                     if (targetState == EnterExitState.Visible) spring(dampingRatio=.76f, stiffness=850f)
                     else tween(110, easing=CubicBezierEasing(.32f,0f,.7f,.38f))
@@ -608,7 +654,7 @@ private fun tabletAddressWidth(viewport: Dp) = (viewport * .44f).coerceAtMost(56
                 }
             } else Modifier.animateEnterExit(enter=fadeIn()+slideInVertically { it/3 },
                 exit=fadeOut(tween(120))+slideOutVertically(tween(140)) { it/4 })
-            val menuHeight = minOf(520.dp, if (tablet) maxHeight-top else maxHeight)
+            val menuHeight = minOf(520.dp, if (fromTop) maxHeight-top else maxHeight)
             Box(position.then(motion)) {
                 DialogGlassSurface(capture,Modifier.width(menuWidth).heightIn(max=menuHeight),
                     shape=RoundedCornerShape(if (tablet) 18.dp else 26.dp),
@@ -715,7 +761,8 @@ private fun tabletAddressWidth(viewport: Dp) = (viewport * .44f).coerceAtMost(56
     }
 }
 
-@Composable private fun Dock(a: MainActivity, capture: WebGlassCapture, readingFraction: () -> Float) {
+@Composable private fun Dock(a: MainActivity, capture: WebGlassCapture, measureAddress: Modifier,
+    layoutTransition: Transition<PhoneTabLayout>, readingFraction: () -> Float) {
     val p = a.page
     val document = capture.takeIf { p.url.isNotBlank() }
     var drag by remember { mutableFloatStateOf(0f) }
@@ -740,94 +787,146 @@ private fun tabletAddressWidth(viewport: Dp) = (viewport * .44f).coerceAtMost(56
         with(density) { (textWidth.size.width.toDp()+32.dp).coerceIn(68.dp,280.dp) }
     }
     val threshold = with(LocalDensity.current) { 46.dp.toPx() }
-    Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-        BoxWithConstraints(Modifier.fillMaxWidth().padding(top = 4.dp)) {
-            val width = maxWidth
-            val touchArea = Modifier.fillMaxWidth().pointerInput(p.id) {
-                val minimumFlick = 18.dp.toPx()
-                val flickSpeed = 420.dp.toPx()
-                awaitEachGesture {
-                    val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
-                    val tracker = VelocityTracker()
-                    tracker.addPointerInputChange(down)
-                    var dragging = false
-                    var startOffset = 0f
-                    val viewport = p.web?.parent as? TabViewport
-                    try {
-                        while (true) {
-                            val event = awaitPointerEvent(PointerEventPass.Initial)
-                            val change = event.changes.firstOrNull { it.id == down.id } ?: break
-                            if (change.isConsumed || event.changes.size > 1 || a.contextMenu != null) break
-                            val (dx, dy) = change.position - down.position
-                            tracker.addPointerInputChange(change)
-                            if (!dragging && maxOf(abs(dx),abs(dy)) >= viewConfiguration.touchSlop) {
-                                settling?.cancel()
-                                startOffset = offset.value
-                                dragging = true
-                                tracking = true
-                            }
-                            if (dragging) {
-                                change.consume()
-                                val adjacent = a.adjacentTab(p, forward = dx < 0)
-                                val horizontal = abs(dx) > abs(dy)
-                                val travel = if (horizontal) dx * (if (adjacent == null) .18f else .55f) else 0f
-                                drag = (startOffset + travel).coerceIn(-threshold*2, threshold*2)
-                                if (horizontal && dx != 0f && viewport != null) {
-                                    viewport.track(adjacent?.takeIf { it.url.isNotBlank() }?.let(a::browser),dx)
-                                } else viewport?.track(null,0f)
-                                if (!change.pressed) {
-                                    val duration = (change.uptimeMillis-down.uptimeMillis).coerceAtLeast(1)
-                                    val average = dx*1000f/duration
-                                    val velocity = tracker.calculateVelocity().x
-                                    val along = if (dx < 0) -velocity else velocity
-                                    val flick = abs(dx) >= minimumFlick &&
-                                        (along >= flickSpeed || duration <= 125L && abs(average) >= flickSpeed)
-                                    if (dy < -threshold && -dy > abs(dx)*1.5f) a.sheet = "标签页"
-                                    else if (abs(dx) > abs(dy)*1.5f && (abs(dx) >= threshold || flick) &&
-                                        along > -flickSpeed) adjacent?.let(a::select)
-                                }
-                            }
-                            if (!change.pressed) break
+    val layout = layoutTransition.targetState
+    val compactAmount by layoutTransition.animateFloat(transitionSpec = { tween(260) }, label = "紧凑布局") {
+        if (it == PhoneTabLayout.Compact) 1f else 0f
+    }
+    val topAmount by layoutTransition.animateFloat(
+        transitionSpec = { tween(330, easing = CubicBezierEasing(.22f,.68f,.22f,1f)) }, label = "地址栏位置"
+    ) { if (it == PhoneTabLayout.Top) 1f else 0f }
+    val forwardAmount by animateFloatAsState(if (p.forward) 1f else 0f,
+        tween(if (p.forward) 280 else 170), label = "手机前进按钮")
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val touchArea = Modifier.pointerInput(p.id) {
+            val minimumFlick = 18.dp.toPx()
+            val flickSpeed = 420.dp.toPx()
+            awaitEachGesture {
+                val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                val tracker = VelocityTracker()
+                tracker.addPointerInputChange(down)
+                var dragging = false
+                var startOffset = 0f
+                val viewport = p.web?.parent as? TabViewport
+                try {
+                    while (true) {
+                        val event = awaitPointerEvent(PointerEventPass.Initial)
+                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                        if (change.isConsumed || event.changes.size > 1 || a.contextMenu != null) break
+                        val (dx, dy) = change.position - down.position
+                        tracker.addPointerInputChange(change)
+                        if (!dragging && maxOf(abs(dx),abs(dy)) >= viewConfiguration.touchSlop) {
+                            settling?.cancel()
+                            startOffset = offset.value
+                            dragging = true
+                            tracking = true
                         }
-                    } finally {
                         if (dragging) {
-                            if (a.page === p) viewport?.retract()
-                            release()
+                            change.consume()
+                            val adjacent = a.adjacentTab(p, forward = dx < 0)
+                            val horizontal = abs(dx) > abs(dy)
+                            val travel = if (horizontal) dx * (if (adjacent == null) .18f else .55f) else 0f
+                            drag = (startOffset + travel).coerceIn(-threshold*2, threshold*2)
+                            if (horizontal && dx != 0f && viewport != null) {
+                                viewport.track(adjacent?.takeIf { it.url.isNotBlank() }?.let(a::browser),dx)
+                            } else viewport?.track(null,0f)
+                            if (!change.pressed) {
+                                val duration = (change.uptimeMillis-down.uptimeMillis).coerceAtLeast(1)
+                                val average = dx*1000f/duration
+                                val velocity = tracker.calculateVelocity().x
+                                val along = if (dx < 0) -velocity else velocity
+                                val flick = abs(dx) >= minimumFlick &&
+                                    (along >= flickSpeed || duration <= 125L && abs(average) >= flickSpeed)
+                                if (dy < -threshold && -dy > abs(dx)*1.5f) a.sheet = "标签页"
+                                else if (abs(dx) > abs(dy)*1.5f && (abs(dx) >= threshold || flick) &&
+                                    along > -flickSpeed) adjacent?.let(a::select)
+                            }
+                        }
+                        if (!change.pressed) break
+                    }
+                } finally {
+                    if (dragging) {
+                        if (a.page === p) viewport?.retract()
+                        release()
+                    }
+                }
+            }
+        }
+        val width = (maxWidth - 24.dp).coerceAtLeast(1.dp)
+        val leadingWidth = 48.dp + 44.dp * forwardAmount
+        val compactGroupWidth = (maxWidth * .84f + 20.dp * forwardAmount).coerceAtMost(width)
+        val compactAddressWidth = (compactGroupWidth - leadingWidth - 64.dp).coerceAtLeast(1.dp)
+        val expandedWidth = lerp(width,compactAddressWidth,compactAmount)
+        val barWidth = lerp(expandedWidth,compactWidth.coerceAtMost(width),fraction)
+        val fullHeight = lerp(50.dp,48.dp,compactAmount)
+        val barHeight = lerp(fullHeight,44.dp,fraction)
+        val sides = compactAmount * (1f-fraction)
+        val actions = (1f-compactAmount) * (1f-fraction)
+        val centerX = (leadingWidth-48.dp) * (.5f*sides)
+        val bottomY = maxHeight - 4.dp - barHeight - 52.dp*actions
+        val barY = lerp(bottomY.coerceAtLeast(0.dp),4.dp,topAmount)
+        val restore = {
+            p.compactTools = false
+            (p.web?.parent as? TabViewport)?.readingToolbar?.expand()
+            Unit
+        }
+        val touch = if (fraction >= 1f) touchArea.then(addressGesture(a,p,restore))
+            .semantics { contentDescription = "显示工具栏" } else touchArea
+        Box(Modifier.align(Alignment.TopCenter).offset(x=centerX,y=barY).width(barWidth).height(barHeight)
+            .then(touch),contentAlignment=Alignment.Center) {
+            PhoneDockGlass(document, Modifier.fillMaxWidth().graphicsLayer {
+                translationX = if (tracking) drag else offset.value
+            }.then(measureAddress)) { AddressRow(a,fraction,fullHeight=fullHeight,showDownloads=layout != PhoneTabLayout.Compact) }
+        }
+        if (sides > .01f) {
+            val side = Modifier.graphicsLayer {
+                alpha = sides
+                scaleX = .76f + .24f*sides
+                scaleY = scaleX
+            }
+            val leftX = centerX - (barWidth + leadingWidth)/2 - 8.dp
+            val rightX = centerX + (barWidth + 48.dp)/2 + 8.dp
+            PhoneDockGlass(document, Modifier.align(Alignment.TopCenter).offset(x=leftX,y=barY)
+                .then(side).width(leadingWidth).height(48.dp)) {
+                Row {
+                    PhoneHistoryButton(a,p,true)
+                    if (forwardAmount > .001f) Box(Modifier.width(44.dp*forwardAmount).height(48.dp)
+                        .clipToBounds(), contentAlignment=Alignment.CenterEnd) {
+                        Box(Modifier.wrapContentWidth(Alignment.End,unbounded=true).graphicsLayer { alpha=forwardAmount }) {
+                            PhoneHistoryButton(a,p,false,44.dp)
                         }
                     }
                 }
             }
-            val barWidth = lerp(width,compactWidth.coerceAtMost(width),fraction)
-            val restore = {
-                p.compactTools = false
-                (p.web?.parent as? TabViewport)?.readingToolbar?.expand()
-                Unit
-            }
-            val touch = if (fraction >= 1f) touchArea.then(addressGesture(a,p,restore))
-                .semantics { contentDescription = "显示工具栏" } else touchArea
-            Box(Modifier.align(Alignment.Center).width(barWidth).height(lerp(50.dp,44.dp,fraction))
-                .then(touch),contentAlignment=Alignment.Center) {
-                PhoneDockGlass(document, Modifier.fillMaxWidth().graphicsLayer {
-                    translationX = if (tracking) drag else offset.value
-                }) { AddressRow(a,fraction) }
+            PhoneDockGlass(document, Modifier.align(Alignment.TopCenter).offset(x=rightX,y=barY)
+                .then(side).size(48.dp)) {
+                var anchor by remember { mutableStateOf(Offset.Zero) }
+                Box(Modifier.fillMaxSize().onGloballyPositioned { anchor = it.localToScreen(Offset(it.size.width/2f,0f)) }
+                    .then(tabMenuGesture(Role.Button, { a.showCompactMore(p,anchor.x.roundToInt(),anchor.y.roundToInt(),false) },
+                        "显示更多操作") { x,y -> a.showCompactMore(p,x,y,true) })
+                    .semantics { contentDescription = "更多" },contentAlignment=Alignment.Center) {
+                    LiquidKitIcon(Icon.More, Ink.current)
+                }
             }
         }
-        Spacer(Modifier.height(4.dp*(1f-fraction)))
-        if (fraction < 1f) PhoneDockGlass(document, Modifier.fillMaxWidth(.87f)
-            .height(48.dp*(1f-fraction)).clipToBounds().graphicsLayer { alpha=1f-fraction }) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceAround) {
-            Tool(Icon.Back, "后退", p.back, animateAvailability = true,
-                hold = { x, y -> a.showNavigationHistory(p, true, x, y) }) { p.web?.goBack() }
-            Tool(Icon.Forward, "前进", p.forward, animateAvailability = true,
-                hold = { x, y -> a.showNavigationHistory(p, false, x, y) }) { p.web?.goForward() }
-            Tool(Icon.Share, "共享", p.url.isNotEmpty()) { a.share(p.url, p.title) }
-            Tool(Icon.Bookmark, "书签") { a.sheet = "书签" }
-            Tool(Icon.SquareOnSquare, "标签页，${a.activeTabs.size} 个", hold = { x, y -> a.showTabActions(p, x, y) }) {
-                a.sheet = "标签页"
+        if (actions > .01f) PhoneDockGlass(document, Modifier.align(Alignment.BottomCenter).offset(y=(-4).dp)
+            .width(width*.87f).height(48.dp*actions).clipToBounds().graphicsLayer { alpha=actions }) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceAround) {
+                PhoneHistoryButton(a,p,true)
+                PhoneHistoryButton(a,p,false)
+                Tool(Icon.Share, "共享", p.url.isNotEmpty()) { a.share(p.url, p.title) }
+                Tool(Icon.Bookmark, "书签") { a.sheet = "书签" }
+                Tool(Icon.SquareOnSquare, "标签页，${a.activeTabs.size} 个", hold = { x,y -> a.showTabActions(p,x,y) }) {
+                    a.sheet = "标签页"
+                }
             }
         }
     }
-    }
+}
+
+@Composable private fun PhoneHistoryButton(a: MainActivity, p: Page, back: Boolean, size: Dp = 48.dp) {
+    Tool(if (back) Icon.Back else Icon.Forward, if (back) "后退" else "前进",
+        if (back) p.back else p.forward, size=size, animateAvailability=true,
+        hold={ x,y -> a.showNavigationHistory(p,back,x,y) }) { p.web?.goBackOrForward(if (back) -1 else 1) }
 }
 
 private fun addressLabel(p: Page) = if (p.url.isEmpty()) "搜索或输入网址"
@@ -836,14 +935,15 @@ private fun addressLabel(p: Page) = if (p.url.isEmpty()) "搜索或输入网址"
 @Composable private fun addressGesture(a: MainActivity, p: Page, tap: () -> Unit) =
     tabMenuGesture(Role.Button, tap, "显示地址栏菜单") { x,y -> a.showAddressActions(p,x,y) }
 
-@Composable private fun AddressRow(a: MainActivity, fold: Float = 0f, wide: Boolean = false) {
+@Composable private fun AddressRow(a: MainActivity, fold: Float = 0f, wide: Boolean = false,
+    fullHeight: Dp = if (wide) 44.dp else 50.dp, showDownloads: Boolean = true) {
     val p = a.page
     fun Modifier.control(label: String, enabled: Boolean = true, action: () -> Unit): Modifier =
         clickable(enabled = enabled, role = Role.Button, onClick = action).semantics { contentDescription = label }
     var menuButton by remember { mutableStateOf<LayoutCoordinates?>(null) }
     fun menuAnchor(c: LayoutCoordinates) = c.localToScreen(Offset(c.size.width/2f,c.size.height.toFloat()))
     val side = Modifier.width(48.dp*(1f-fold)).fillMaxHeight().clipToBounds().graphicsLayer { alpha=1f-fold }
-    Box(Modifier.fillMaxWidth().height(lerp(if (wide) 44.dp else 50.dp,28.dp,fold))) {
+    Box(Modifier.fillMaxWidth().height(lerp(fullHeight,28.dp,fold))) {
         Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
             if (fold < 1f) Box(side.onGloballyPositioned {
                 menuButton = it
@@ -852,8 +952,10 @@ private fun addressLabel(p: Page) = if (p.url.isEmpty()) "搜索或输入网址"
                 a.pageMenuAnchor = menuButton?.takeIf { it.isAttached }?.let(::menuAnchor)
                 a.sheet = "页面菜单"
             },
-                contentAlignment = Alignment.Center) { LiquidKitIcon(if (wide) Icon.List else Icon.More, Ink.current) }
-            if (fold < 1f && a.downloads.ids(p.secret).isNotEmpty()) {
+                contentAlignment = Alignment.Center) {
+                if (wide) LiquidKitIcon(Icon.List, Ink.current) else PhonePageMenuIcon(Ink.current)
+            }
+            if (showDownloads && fold < 1f && a.downloads.ids(p.secret).isNotEmpty()) {
                 Box(side.liquidKitPopoverAnchor(a.downloadAnchor).clip(RoundedCornerShape(24.dp))
                     .control("查看下载") { a.sheet = "下载项目" }, contentAlignment = Alignment.Center) {
                     LiquidKitIcon(Icon.Download, Accent.current)
@@ -1001,7 +1103,7 @@ private fun addressLabel(p: Page) = if (p.url.isEmpty()) "搜索或输入网址"
 }
 
 @Composable private fun AnimatedVisibilityScope.AddressEditor(a: MainActivity, capture: WebGlassCapture?,
-    tabletAddress: Rect?, tabletEditorBounds: MutableState<Rect?>, onInlineAddress: (Boolean) -> Unit) {
+    addressAnchor: Rect?, tabletEditorBounds: MutableState<Rect?>, onInlineAddress: (Boolean) -> Unit) {
     val page = a.page
     var query by remember(page.id) { mutableStateOf(TextFieldValue(page.url, TextRange(0, page.url.length))) }
     var edited by remember(page.id) { mutableStateOf(false) }
@@ -1142,7 +1244,7 @@ private fun addressLabel(p: Page) = if (p.url.isEmpty()) "搜索或输入网址"
             }, label="地址栏内容显现") { if (it == EnterExitState.Visible) 1f else 0f }
             val density = LocalDensity.current
             val initialWidth = remember { maxWidth }
-            val openingAnchor = remember { tabletAddress }
+            val openingAnchor = remember { addressAnchor }
             val source = openingAnchor.takeIf { initialWidth == maxWidth }
             val startWidth = with(density) { source?.width?.toDp() } ?: tabletAddressWidth(maxWidth)
             val startHeight = with(density) { source?.height?.toDp() } ?: 44.dp
@@ -1190,15 +1292,30 @@ private fun addressLabel(p: Page) = if (p.url.isEmpty()) "搜索或输入网址"
                     }
                 }
             }
-        } else Column(Modifier.align(Alignment.BottomCenter).animateEnterExit(
-            enter=fadeIn(tween(170))+slideInVertically(tween(190)) { it/5 },
-            exit=fadeOut(tween(120))+slideOutVertically(tween(150)) { it/5 }
-        ).width(panelWidth).padding(vertical=6.dp),
-            verticalArrangement=Arrangement.spacedBy(6.dp)) {
-            if (suggestions.isNotEmpty()) DialogGlassSurface(capture, Modifier.fillMaxWidth(),
-                shape=RoundedCornerShape(19.dp), tint=Card.current.copy(alpha=.48f)) { choices() }
-            DialogGlassSurface(capture, Modifier.fillMaxWidth(), shape=LiquidKitCapsule,
-                tint=Card.current.copy(alpha=.32f)) { field() }
+        } else {
+            val fromTop = BrowserLibrary.phoneTabLayout == PhoneTabLayout.Top
+            val fraction by transition.animateFloat(transitionSpec = {
+                if (targetState == EnterExitState.Visible) tween(225, easing=CubicBezierEasing(.2f,.68f,.22f,1f))
+                else if (dismissedWithEscape) snap() else tween(150)
+            },label="手机地址栏展开") { if (it == EnterExitState.Visible) 1f else 0f }
+            val source = remember(maxWidth) { addressAnchor }
+            val density = LocalDensity.current
+            val startWidth = with(density) { source?.width?.toDp() }?.coerceIn(1.dp,panelWidth) ?: panelWidth
+            val shift = with(density) { source?.let { bounds -> panelOrigin?.let { (bounds.center.x-it.x).toDp()-maxWidth/2 } } } ?: 0.dp
+            val input: @Composable () -> Unit = {
+                DialogGlassSurface(capture, Modifier.width(lerp(startWidth,panelWidth,fraction)).offset(x=shift*(1f-fraction)),
+                    shape=LiquidKitCapsule,tint=Card.current.copy(alpha=.32f)) { field() }
+            }
+            Column(Modifier.align(if (fromTop) Alignment.TopCenter else Alignment.BottomCenter)
+                .width(panelWidth).padding(vertical=6.dp).graphicsLayer { alpha = (fraction*2).coerceIn(0f,1f) },
+                horizontalAlignment=Alignment.CenterHorizontally,verticalArrangement=Arrangement.spacedBy(6.dp)) {
+                if (fromTop) input()
+                if (suggestions.isNotEmpty()) DialogGlassSurface(capture, Modifier.fillMaxWidth().graphicsLayer {
+                    alpha = fraction
+                    translationY = (if (fromTop) -12.dp else 12.dp).toPx() * (1f-fraction)
+                },shape=RoundedCornerShape(19.dp),tint=Card.current.copy(alpha=.48f)) { choices() }
+                if (!fromTop) input()
+            }
         }
     }
 }
@@ -1401,6 +1518,9 @@ internal val librarySections = setOf(sidebarHome, "书签", "阅读列表", "历
 
 @Composable private fun PageActions(a: MainActivity) {
     val p = a.page
+    if (androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp < 650) {
+        Action(Icon.SliderHorizontal,"标签栏布局",BrowserLibrary.phoneTabLayout.label) { a.sheet = "标签栏布局" }
+    }
     if (p.url.isNotEmpty()) {
         Action(Icon.Search,"页面缩放","网页字号 · ${p.siteZoom}%") { a.sheet = "页面缩放" }
         val extracted by produceState<ReaderArticle?>(null, p, p.url, p.readerRequest) {
