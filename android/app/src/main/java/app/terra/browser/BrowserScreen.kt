@@ -99,7 +99,8 @@ private fun host(url: String) = Uri.parse(url).host.orEmpty()
         fontFamily = if (serif) FontFamily.Serif else FontFamily.SansSerif), maxLines = lines, overflow = TextOverflow.Ellipsis)
 }
 @Composable private fun Tool(icon: Icon, label: String, enabled: Boolean = true,
-                             hold: ((Int, Int) -> Unit)? = null, rotation: Float = 0f, size: Dp = 48.dp, click: () -> Unit) {
+                             hold: ((Int, Int) -> Unit)? = null, rotation: Float = 0f, size: Dp = 48.dp,
+                             animateAvailability: Boolean = false, click: () -> Unit) {
     val interaction = if (hold == null) Modifier.clickable(enabled = enabled, role = Role.Button, onClick = click)
     else {
         var coordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
@@ -115,7 +116,9 @@ private fun host(url: String) = Uri.parse(url).host.orEmpty()
     }
     Box(Modifier.size(size).clip(RoundedCornerShape(24.dp)).then(interaction)
         .semantics { contentDescription = label }, contentAlignment = Alignment.Center) {
-        LiquidKitIcon(icon, if (enabled) Ink.current else Muted.current.copy(alpha = .45f),
+        val tint = if (enabled) Ink.current else Muted.current.copy(alpha = .45f)
+        val ink = if (animateAvailability) animateColorAsState(tint, tween(140), label = "导航箭头").value else tint
+        LiquidKitIcon(icon, ink,
             if (rotation == 0f) Modifier else Modifier.graphicsLayer { rotationZ = rotation })
     }
 }
@@ -224,7 +227,7 @@ private fun host(url: String) = Uri.parse(url).host.orEmpty()
                         Column(Modifier.align(alignment).onSizeChanged {
                             if (fold() == 0f) dockHeight = it.height
                         }.padding(bottom=4.dp)) {
-                            Dock(a,::fold)
+                            Dock(a,capture,::fold)
                         }
                     } else if (!zoomOpen && !finding && !compact) {
                         Column(Modifier.align(alignment).graphicsLayer {
@@ -233,7 +236,7 @@ private fun host(url: String) = Uri.parse(url).host.orEmpty()
                             translationY = -size.height*.45f*t
                             scaleX = 1f-.18f*t
                         }.onSizeChanged { toolbarHeight = it.height }) {
-                            TabletToolbar(a, editingTabletAddress, measureAddress, tabletEditorBounds)
+                            TabletToolbar(a, editingTabletAddress, measureAddress, tabletEditorBounds, capture)
                         }
                     }
                     AnimatedVisibility(visible=finding,modifier=Modifier.align(alignment),
@@ -344,20 +347,48 @@ private fun tabletAddressWidth(viewport: Dp) = (viewport * .44f).coerceAtMost(56
     }
 }
 
-@Composable private fun TabletToolbar(a: MainActivity, editingAddress: Boolean, measureAddress: Modifier,
-    editorBounds: State<Rect?>) {
-    val p = a.page
-    BoxWithConstraints(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 4.dp)) {
-        Row(Modifier.align(Alignment.CenterStart), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            SidebarButton("显示侧栏") { a.sheet = a.sidebarLocation }
-            LiquidKitGlassSurface(interactive=true) {
-                Row {
-                    Tool(Icon.Back, "后退", p.back, size = 44.dp, hold = { x,y -> a.showNavigationHistory(p,true,x,y) }) { p.web?.goBack() }
-                    AnimatedVisibility(p.forward,enter=expandHorizontally(expandFrom=Alignment.Start)+fadeIn(),
-                        exit=shrinkHorizontally(shrinkTowards=Alignment.Start)+fadeOut()) {
-                        Tool(Icon.Forward,"前进", size = 44.dp, hold = { x,y -> a.showNavigationHistory(p,false,x,y) }) { p.web?.goForward() }
+@Composable private fun TabletHistoryButtons(a: MainActivity, page: Page) {
+    val reveal by animateFloatAsState(
+        targetValue = if (page.forward) 1f else 0f,
+        animationSpec = if (page.forward) tween(420, easing = CubicBezierEasing(.18f,.65f,.30f,1f))
+            else tween(165, easing = CubicBezierEasing(.32f,0f,.32f,1f)),
+        label = "前进按钮"
+    )
+    LiquidKitGlassSurface(interactive = true) {
+        Row {
+            Tool(Icon.Back, "后退", page.back, size = 44.dp,
+                hold = { x,y -> a.showNavigationHistory(page,true,x,y) }) { page.web?.goBack() }
+            if (reveal > 0f) {
+                Box(Modifier.width(44.dp * reveal).height(44.dp).clipToBounds(), contentAlignment = Alignment.CenterEnd) {
+                    Box(Modifier.wrapContentWidth(Alignment.End, unbounded = true).graphicsLayer {
+                        alpha = ((reveal - .18f) / .82f).coerceIn(0f, 1f)
+                    }) {
+                        Tool(Icon.Forward, "前进", page.forward, size = 44.dp,
+                            hold = { x,y -> a.showNavigationHistory(page,false,x,y) }) { page.web?.goForward() }
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable private fun TabletToolbar(a: MainActivity, editingAddress: Boolean, measureAddress: Modifier,
+    editorBounds: State<Rect?>, capture: WebGlassCapture) {
+    val p = a.page
+    var navigationBounds by remember { mutableStateOf<Rect?>(null) }
+    val darkNavigation by remember(capture) { derivedStateOf { navigationBounds?.let(capture::darkUnder) } }
+    val navigationInk = when (darkNavigation.takeIf { p.url.isNotBlank() }) {
+        true -> Color.White
+        false -> Color(0xff1c1c1e)
+        null -> Ink.current
+    }
+    BoxWithConstraints(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 4.dp)) {
+        Row(Modifier.align(Alignment.CenterStart).onGloballyPositioned {
+            navigationBounds = Rect(it.localToScreen(Offset.Zero), it.size.toSize())
+        }, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            CompositionLocalProvider(Ink provides navigationInk, Muted provides navigationInk) {
+                SidebarButton("显示侧栏") { a.sheet = a.sidebarLocation }
+                TabletHistoryButtons(a, p)
             }
         }
         val addressWidth = tabletAddressWidth(maxWidth + 20.dp)
@@ -669,8 +700,24 @@ private fun tabletAddressWidth(viewport: Dp) = (viewport * .44f).coerceAtMost(56
     }
 }
 
-@Composable private fun Dock(a: MainActivity, readingFraction: () -> Float) {
+@Composable private fun PhoneDockGlass(capture: WebGlassCapture?, modifier: Modifier, content: @Composable () -> Unit) {
+    var bounds by remember { mutableStateOf<Rect?>(null) }
+    val dark by remember(capture) { derivedStateOf { bounds?.let { capture?.darkUnder(it) } } }
+    val ink = when (dark) {
+        true -> Color.White
+        false -> Color(0xff1c1c1e)
+        null -> Ink.current
+    }
+    LiquidKitGlassSurface(modifier.onGloballyPositioned {
+        bounds = Rect(it.localToScreen(Offset.Zero), it.size.toSize())
+    }, interactive = true) {
+        CompositionLocalProvider(Ink provides ink, Muted provides if (dark == null) Muted.current else ink) { content() }
+    }
+}
+
+@Composable private fun Dock(a: MainActivity, capture: WebGlassCapture, readingFraction: () -> Float) {
     val p = a.page
+    val document = capture.takeIf { p.url.isNotBlank() }
     var drag by remember { mutableFloatStateOf(0f) }
     var tracking by remember { mutableStateOf(false) }
     var settling by remember { mutableStateOf<Job?>(null) }
@@ -760,17 +807,19 @@ private fun tabletAddressWidth(viewport: Dp) = (viewport * .44f).coerceAtMost(56
                 .semantics { contentDescription = "显示工具栏" } else touchArea
             Box(Modifier.align(Alignment.Center).width(barWidth).height(lerp(50.dp,44.dp,fraction))
                 .then(touch),contentAlignment=Alignment.Center) {
-                LiquidKitGlassSurface(Modifier.fillMaxWidth().graphicsLayer {
+                PhoneDockGlass(document, Modifier.fillMaxWidth().graphicsLayer {
                     translationX = if (tracking) drag else offset.value
                 }) { AddressRow(a,fraction) }
             }
         }
         Spacer(Modifier.height(4.dp*(1f-fraction)))
-        if (fraction < 1f) LiquidKitGlassSurface(Modifier.fillMaxWidth(.87f)
+        if (fraction < 1f) PhoneDockGlass(document, Modifier.fillMaxWidth(.87f)
             .height(48.dp*(1f-fraction)).clipToBounds().graphicsLayer { alpha=1f-fraction }) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceAround) {
-            Tool(Icon.Back, "后退", p.back, hold = { x, y -> a.showNavigationHistory(p, true, x, y) }) { p.web?.goBack() }
-            Tool(Icon.Forward, "前进", p.forward, hold = { x, y -> a.showNavigationHistory(p, false, x, y) }) { p.web?.goForward() }
+            Tool(Icon.Back, "后退", p.back, animateAvailability = true,
+                hold = { x, y -> a.showNavigationHistory(p, true, x, y) }) { p.web?.goBack() }
+            Tool(Icon.Forward, "前进", p.forward, animateAvailability = true,
+                hold = { x, y -> a.showNavigationHistory(p, false, x, y) }) { p.web?.goForward() }
             Tool(Icon.Share, "共享", p.url.isNotEmpty()) { a.share(p.url, p.title) }
             Tool(Icon.Bookmark, "书签") { a.sheet = "书签" }
             Tool(Icon.SquareOnSquare, "标签页，${a.activeTabs.size} 个", hold = { x, y -> a.showTabActions(p, x, y) }) {

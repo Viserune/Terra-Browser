@@ -13,10 +13,13 @@ from xml.etree import ElementTree
 
 from PIL import Image
 from safari_motion import Pages
+from history_layers import serve_layers, check_layers
 
 
 class EdgePages(Pages):
     def do_GET(self):
+        if serve_layers(self):
+            return
         if self.path != "/garden":
             return super().do_GET()
         html = b"""<meta name=viewport content='width=device-width'><title>Garden</title>
@@ -34,6 +37,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("serial")
     parser.add_argument("--record",type=Path)
+    parser.add_argument("--layers",action="store_true",help="Verify moving page layers, live paint and history handoff")
+    parser.add_argument("--screens",type=Path)
     args = parser.parse_args()
     binary = shutil.which("adb") or str(Path(os.environ["ANDROID_HOME"],"platform-tools","adb.exe" if os.name=="nt" else "adb"))
     adb = [binary,"-s",args.serial]
@@ -47,7 +52,10 @@ def main():
     def locate(label):
         end = time.monotonic()+20
         while time.monotonic()<end:
-            run("shell","uiautomator","dump","/sdcard/terra-edge.xml")
+            result = run("shell","uiautomator","dump","/sdcard/terra-edge.xml")
+            if b"dumped to" not in result.lower():
+                time.sleep(.1)
+                continue
             tree = ElementTree.fromstring(run("exec-out","cat","/sdcard/terra-edge.xml"))
             for n in tree.iter("node"):
                 if label in (n.get("text"),n.get("content-desc")):
@@ -68,6 +76,9 @@ def main():
         run("reverse",f"tcp:{port}",f"tcp:{port}")
         recorder=None
         try:
+            if args.layers:
+                check_layers(server, adb, run, locate, touch, frame, args.screens, args.record)
+                return
             run("shell","am","start","-n","app.terra.browser/.MainActivity","-a","android.intent.action.VIEW",
                 "-d",f"http://127.0.0.1:{port}/sky")
             run("shell","input","tap",*locate("Open garden"))

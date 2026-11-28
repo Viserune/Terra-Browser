@@ -671,6 +671,15 @@ open class MainActivity : ComponentActivity() {
             }
             override fun doUpdateVisitedHistory(v: WebView, url: String, reload: Boolean) {
                 if (httpAddress(url)) {
+                    val swipe = (v.parent as? TabViewport)?.historySwipe
+                    swipe?.historyChanged(v, url)
+                    if (p.documentVisible && v.url == url) {
+                        // Fragment and pushState traversals may have no page-finished callback.
+                        swipe?.apply {
+                            visualCommit(v)
+                            rememberWhenDrawn(v, url)
+                        }
+                    }
                     if (p.url != url) {
                         p.readerRequest++
                         p.readerOffset = 0
@@ -683,11 +692,13 @@ open class MainActivity : ComponentActivity() {
                 navigation(v)
             }
             override fun onPageCommitVisible(v: WebView, url: String) {
-                if (v.url == url) p.documentVisible = true
-                if (v.url == url) (v.parent as? TabViewport)?.revealLinkDestination(v)
-                if (v.url == url) (v.parent as? TabViewport)?.pullRefresh?.loaded(v)
-                if (v.url == url) showRestoredDocument(url, finished=false)
-                (v.parent as? TabViewport)?.historySwipe?.visualCommit(v)
+                if (v.url != url) return
+                p.documentVisible = true
+                val viewport = v.parent as? TabViewport
+                viewport?.revealLinkDestination(v)
+                viewport?.pullRefresh?.loaded(v)
+                showRestoredDocument(url, finished=false)
+                viewport?.historySwipe?.visualCommit(v)
             }
             override fun onFormResubmission(v: WebView, dontResend: android.os.Message, resend: android.os.Message) {
                 (v.parent as? TabViewport)?.pullRefresh?.loaded(v)

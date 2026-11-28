@@ -194,6 +194,7 @@ internal class TabViewport(context: Context, private val glass: WebGlassCapture,
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w,h,oldw,oldh)
+        if (oldw > 0 && w != oldw) historySwipe.reset()
         updateEdgeBounds()
         refreshGlass()
     }
@@ -349,6 +350,15 @@ internal class TabViewport(context: Context, private val glass: WebGlassCapture,
     internal fun drawGlassDocument(canvas: Canvas) {
         if (drawNavigation(canvas)) return
         val page = front ?: return
+        drawHistoryPage(canvas, page)
+        drawLinkSource(canvas)
+    }
+
+    internal fun drawHistoryPage(canvas: Canvas, page: WebView) {
+        if (canvas.isHardwareAccelerated) {
+            drawChild(canvas, page, drawingTime)
+            return
+        }
         val x = page.left + page.translationX
         val y = page.top.toFloat()
         val checkpoint = canvas.save()
@@ -360,7 +370,6 @@ internal class TabViewport(context: Context, private val glass: WebGlassCapture,
         page.draw(canvas)
         if (needsRedraw) page.invalidate()
         canvas.restoreToCount(checkpoint)
-        drawLinkSource(canvas)
     }
 
     private fun drawSlide(canvas: Canvas, page: WebView) {

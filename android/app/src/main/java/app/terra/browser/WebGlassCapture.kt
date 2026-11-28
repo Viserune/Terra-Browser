@@ -13,6 +13,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.inset
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.layout.onGloballyPositioned
 import com.kyant.backdrop.backdrops.rememberCanvasBackdrop
@@ -59,6 +60,33 @@ internal class WebGlassCapture {
             }
         }
         if (opaque == 0) null else dark*2 > opaque
+    }
+
+    fun darkUnder(bounds: Rect): Boolean? {
+        val sample = frame ?: return null
+        val a = sample.area
+        val bitmap = sample.bitmap
+        val scaleY = bitmap.height.toFloat() / (a.bottom - a.top)
+        // The glass extends the first document row into the toolbar inset.
+        val firstRow = ceil((a.topPadding - a.top) * scaleY).toInt().coerceAtLeast(0)
+        val lastRow = (floor((a.viewHeight - a.bottomPadding - a.top) * scaleY).toInt() - 1).coerceAtMost(bitmap.height - 1)
+        if (firstRow > lastRow) return null
+        var dark = 0
+        var opaque = 0
+        for (i in 1..3) {
+            val x = ((bounds.left + bounds.width * i / 4 - a.screenX) * bitmap.width / a.viewWidth)
+                .roundToInt().coerceIn(0, bitmap.width - 1)
+            for (j in 1..3) {
+                val y = ((bounds.top + bounds.height * j / 4 - a.screenY - a.top) * scaleY)
+                    .roundToInt().coerceIn(firstRow, lastRow)
+                val pixel = bitmap.getPixel(x, y)
+                if (Color.alpha(pixel) >= 192) {
+                    opaque++
+                    if (Color.luminance(pixel) < .22f) dark++
+                }
+            }
+        }
+        return if (opaque > 0) dark * 2 > opaque else null
     }
 
     fun sample(view: TabViewport) {

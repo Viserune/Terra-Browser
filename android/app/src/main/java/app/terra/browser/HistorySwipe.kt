@@ -8,7 +8,6 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.RectF
-import android.net.Uri
 import android.util.LruCache
 import android.view.MotionEvent
 import android.view.VelocityTracker
@@ -21,9 +20,11 @@ import kotlin.math.roundToInt
 /** History images belong to the open viewport and are never persisted. */
 internal class HistorySwipe(private val host: TabViewport, private val redraw: () -> Unit) {
     private data class Entry(val web: WebView, val index: Int, val url: String)
-    private val images = object : LruCache<Entry, Bitmap>(6 * 1024 * 1024) {
-        override fun sizeOf(key: Entry, value: Bitmap) = value.allocationByteCount
+    private data class Snapshot(val bitmap: Bitmap, val width: Int, val height: Int)
+    private val images = object : LruCache<Entry, Snapshot>(6 * 1024 * 1024) {
+        override fun sizeOf(key: Entry, value: Snapshot) = value.bitmap.allocationByteCount
     }
+    private val backgroundColors = LruCache<Entry, Int>(48)
     private val density get() = host.resources.displayMetrics.density
     private val slop = ViewConfiguration.get(host.context).scaledTouchSlop
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
@@ -34,9 +35,13 @@ internal class HistorySwipe(private val host: TabViewport, private val redraw: (
     private var velocity: VelocityTracker? = null
     private var source: Entry? = null
     private var target: Entry? = null
+    private var targetImage: Snapshot? = null
+    private var outgoingImage: Snapshot? = null
     private var fraction = 0f
     private var animator: ValueAnimator? = null
     private var navigating = false
+    private var destinationDrawn = false
+    private var destinationVisited = false
     private val endTransition = Runnable { reset() }
 
     fun remember(web: WebView): Bitmap? {
@@ -54,7 +59,9 @@ internal class HistorySwipe(private val host: TabViewport, private val redraw: (
             translate(-web.scrollX.toFloat(), -web.scrollY.toFloat())
             web.draw(this)
         }
-        images.put(Entry(web, history.currentIndex, url), image)
+        val entry = Entry(web, history.currentIndex, url)
+        images.put(entry, Snapshot(image, web.width, web.height))
+        backgroundColors.put(entry, image.getPixel(0, image.height / 2))
         web.postInvalidateOnAnimation()
         return image
     }
@@ -73,12 +80,24 @@ internal class HistorySwipe(private val host: TabViewport, private val redraw: (
 
     fun visualCommit(web: WebView) {
         val entry = target ?: return
-        if (!navigating || entry.web !== web || web.url != entry.url || web.copyBackForwardList().currentIndex != entry.index) return
+        if (!navigating || entry.web !== web || web.copyBackForwardList().currentIndex != entry.index) return
+        val committedUrl = web.url
         web.postVisualStateCallback(0, object : WebView.VisualStateCallback() {
             override fun onComplete(requestId: Long) {
-                if (navigating && target === entry) reset()
+                if (target !== entry || web.url != committedUrl || web.copyBackForwardList().currentIndex != entry.index) return
+                destinationDrawn = true
+                if (animator == null) reset()
             }
         })
+    }
+
+    fun historyChanged(web: WebView, url: String) {
+        val from = source ?: return
+        val to = target ?: return
+        if (from.web !== web) return
+        val index = web.copyBackForwardList().currentIndex
+        if (navigating && index == to.index) destinationVisited = true
+        else if (destinationVisited || index != from.index || url != from.url) reset()
     }
 
     fun reset() {
@@ -92,17 +111,26 @@ internal class HistorySwipe(private val host: TabViewport, private val redraw: (
         val visible = source != null
         source = null
         target = null
+        targetImage = null
+        outgoingImage = null
         fraction = 0f
         navigating = false
+        destinationDrawn = false
+        destinationVisited = false
         if (visible) redraw()
     }
 
     fun forget(web: WebView) {
         images.snapshot().keys.filter { it.web === web }.forEach { images.remove(it) }
+        backgroundColors.snapshot().keys.filter { it.web === web }.forEach { backgroundColors.remove(it) }
     }
 
     fun touch(web: WebView, event: MotionEvent, cancelChild: () -> Unit): Boolean {
-        if (animator != null || navigating) return true
+        if (animator != null) return true
+        if (navigating) {
+            if (event.actionMasked != MotionEvent.ACTION_DOWN) return true
+            reset()
+        }
         val dx = event.x - startX
         val dy = event.y - startY
         when (event.actionMasked) {
@@ -132,9 +160,10 @@ internal class HistorySwipe(private val host: TabViewport, private val redraw: (
                     val index = history.currentIndex
                     if (index+direction !in 0 until history.size) { reset(); return false }
                     val currentUrl = history.currentItem?.url ?: return false
-                    remember(web)
                     source = Entry(web, index, currentUrl)
-                    target = Entry(web, index+direction, history.getItemAtIndex(index+direction).url)
+                    val next = Entry(web, index+direction, history.getItemAtIndex(index+direction).url)
+                    target = next
+                    targetImage = images.get(next)
                     cancelChild()
                 }
                 fraction = (-direction * dx / host.width).coerceIn(0f,1f)
@@ -145,7 +174,8 @@ internal class HistorySwipe(private val host: TabViewport, private val redraw: (
                 if (source != null) {
                     velocity?.apply { addMovement(event); computeCurrentVelocity(1000) }
                     val speed = -direction * (velocity?.xVelocity ?: 0f)
-                    settle(fraction >= .34f || fraction * host.width > 24*density && speed > 780*density)
+                    val fling = 780 * density
+                    settle(speed > -fling && (fraction >= .34f || fraction * host.width > 24*density && speed > fling))
                     return true
                 }
                 reset()
@@ -161,24 +191,28 @@ internal class HistorySwipe(private val host: TabViewport, private val redraw: (
     private fun settle(commit: Boolean) {
         val from = source ?: return
         val to = target ?: return
-        val animation = ValueAnimator.ofFloat(fraction, if (commit) 1f else 0f)
+        val history = from.web.copyBackForwardList()
+        if (history.currentIndex != from.index || history.currentItem?.url != from.url) { reset(); return }
+        val follow = commit && to.index in 0 until history.size && history.getItemAtIndex(to.index).url == to.url
+        val animation = ValueAnimator.ofFloat(fraction, if (follow) 1f else 0f)
         animator = animation
-        animation.duration = (140 + 90 * if (commit) 1-fraction else fraction).toLong()
+        animation.duration = (140 + 90 * if (follow) 1-fraction else fraction).toLong()
         animation.interpolator = DecelerateInterpolator()
         animation.addUpdateListener { fraction = it.animatedValue as Float; redraw() }
         animation.addListener(object : AnimatorListenerAdapter() {
             override fun onAnimationEnd(ended: Animator) {
                 if (animator !== ended) return
                 animator = null
-                val history = from.web.copyBackForwardList()
-                if (commit && history.currentIndex == from.index && history.currentItem?.url == from.url &&
-                    to.index in 0 until history.size && history.getItemAtIndex(to.index).url == to.url) {
-                    navigating = true
-                    host.postDelayed(endTransition, 850)
-                    from.web.goBackOrForward(to.index-from.index)
-                } else reset()
+                if (navigating && !destinationDrawn) host.postDelayed(endTransition, 3000)
+                else reset()
             }
         })
+        if (follow) {
+            remember(from.web)
+            outgoingImage = images.get(from)
+            navigating = true
+            from.web.goBackOrForward(to.index - from.index)
+        }
         animation.start()
     }
 
@@ -192,15 +226,19 @@ internal class HistorySwipe(private val host: TabViewport, private val redraw: (
             box.set(offset, current.web.top.toFloat(), offset+w, current.web.bottom.toFloat())
             canvas.save()
             canvas.clipRect(left,box.top,right,box.bottom)
-            paint.color = Color.WHITE
-            val bitmap = images.get(entry)
-            if (bitmap != null) canvas.drawBitmap(bitmap,null,box,paint)
-            else {
-                canvas.drawColor(Color.WHITE)
-                paint.color = Color.DKGRAY
-                paint.textAlign = Paint.Align.CENTER
-                paint.textSize = 17*density
-                canvas.drawText(Uri.parse(entry.url).host.orEmpty(),box.centerX(),box.centerY(),paint)
+            if (entry === current && !navigating) {
+                canvas.save()
+                canvas.translate(offset, 0f)
+                host.drawHistoryPage(canvas, entry.web)
+                canvas.restore()
+            } else {
+                val snapshot = if (entry === current) outgoingImage else targetImage
+                canvas.drawColor(backgroundColors.get(entry) ?: Color.WHITE)
+                if (snapshot != null && snapshot.width == current.web.width && abs(snapshot.height - box.height()) < 100*density) {
+                    paint.color = Color.WHITE
+                    box.bottom = box.top + snapshot.height
+                    canvas.drawBitmap(snapshot.bitmap, null, box, paint)
+                }
             }
             if (shade > 0) canvas.drawColor(Color.argb((shade*42).toInt(),0,0,0))
             canvas.restore()
