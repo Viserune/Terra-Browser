@@ -12,6 +12,7 @@ import numpy as np
 def glass_positions(movie, density, upward):
     video = cv2.VideoCapture(str(movie))
     positions = []
+    direction = -1 if upward else 1
     try:
         while True:
             ok, frame = video.read()
@@ -32,13 +33,8 @@ def glass_positions(movie, density, upward):
                     16 * density <= last - first <= 60 * density and 0.15 < y < 0.84
                 ):
                     continue
-                travel = (
-                    (positions[-1] - y if upward else y - positions[-1])
-                    if positions
-                    else 1
-                )
-                if travel > 0.01:
-                    positions.append(y)
+                if not positions or direction * (y - positions[-1]) > 0.01:
+                    positions.append(float(y))
     finally:
         video.release()
     return positions
@@ -87,7 +83,14 @@ def verify_layout_motion(device, url):
                 points = glass_positions(
                     movie, device.density, upward=(target == "top")
                 )
-                assert len(points) >= 4 and abs(points[-1] - points[0]) > 0.38, (
+                # The dismissing picker can cover the start. Check the exposed
+                # middle and the arrival side; geometry() verified the endpoint.
+                assert len(points) >= 4 and any(0.38 < y < 0.62 for y in points), (
+                    target,
+                    points,
+                )
+                assert abs(points[-1] - points[0]) > 0.24, (target, points)
+                assert points[-1] < 0.27 if target == "top" else points[-1] > 0.73, (
                     target,
                     points,
                 )
