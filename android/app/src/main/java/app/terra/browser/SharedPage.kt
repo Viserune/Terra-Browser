@@ -14,24 +14,30 @@ import android.print.PrintManager
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.core.content.FileProvider
 import androidx.core.graphics.drawable.toBitmap
 import androidx.core.net.toUri
 import androidx.lifecycle.Lifecycle
-import java.io.File
 import java.util.UUID
 
 internal class SharedPage(val site: Site, val page: Page?, val anchor: Offset?, val secret: Boolean) {
+    private val revision = page?.readerRequest
+    private val source = page?.web
     val domain = site.url.toUri().host.orEmpty().ifBlank { site.url }
-    val formats get() = if (currentDocument() != null && !secret) ShareFormat.entries else listOf(ShareFormat.Link, ShareFormat.WithTitle)
-    fun currentDocument() = page?.web?.takeIf { page.url == site.url && it.url == site.url }
+    val formats get() = when {
+        currentDocument() == null -> listOf(ShareFormat.Auto)
+        secret -> listOf(ShareFormat.Auto, ShareFormat.Pdf, ShareFormat.ReaderPdf)
+        else -> ShareFormat.entries
+    }
+    fun currentDocument() = source?.takeIf { page?.web === it && page.readerRequest == revision && it.url == site.url }
 }
 
-internal enum class ShareFormat(val label: String, val mime: String) {
-    Link("网页链接", "text/plain"), WithTitle("标题和链接", "text/plain"), Archive("网页归档", "multipart/related")
+internal enum class ShareFormat(val label: String, val mime: String, val extension: String) {
+    Auto("自动", "text/plain", ""), Pdf("PDF", "application/pdf", "pdf"),
+    ReaderPdf("阅读器视图版 PDF", "application/pdf", "pdf"), Archive("网页归档", "multipart/related", "mht");
+    val pdf get() = this == Pdf || this == ReaderPdf
 }
 
-internal data class ShareApp(val component: ComponentName, val label: String, val icon: ImageBitmap)
+internal data class ShareApp(val component: ComponentName, val label: String, val icon: ImageBitmap, val format: ShareFormat)
 
 internal fun MainActivity.share(url: String, title: String? = null, anchor: Offset? = null) {
     if (url.isBlank()) return
@@ -41,57 +47,46 @@ internal fun MainActivity.share(url: String, title: String? = null, anchor: Offs
     sharedPage = SharedPage(Site(name, url), source, anchor, page.secret)
 }
 
-internal fun MainActivity.shareApps(mime: String): List<ShareApp> {
+internal fun MainActivity.shareApps(format: ShareFormat, canExportPage: Boolean): List<ShareApp> {
     val pm = packageManager
-    return pm.queryIntentActivities(Intent(Intent.ACTION_SEND).setType(mime), PackageManager.MATCH_DEFAULT_ONLY)
-        .filter { it.activityInfo.exported && it.activityInfo.packageName != packageName }
-        .sortedWith(ResolveInfo.DisplayNameComparator(pm))
-        .mapNotNull {
-            runCatching { ShareApp(ComponentName(it.activityInfo.packageName, it.activityInfo.name),
-                it.loadLabel(pm).toString(), it.loadIcon(pm).toBitmap(96, 96).asImageBitmap()) }.getOrNull()
-        }.distinctBy { it.component }
+    val types = if (format == ShareFormat.Auto && canExportPage) listOf(format, ShareFormat.Pdf) else listOf(format)
+    return types.flatMap { type ->
+        pm.queryIntentActivities(Intent(Intent.ACTION_SEND).setType(type.mime), PackageManager.MATCH_DEFAULT_ONLY)
+            .filter { it.activityInfo.exported && it.activityInfo.packageName != packageName }
+            .sortedWith(ResolveInfo.DisplayNameComparator(pm))
+            .mapNotNull {
+                runCatching { ShareApp(ComponentName(it.activityInfo.packageName, it.activityInfo.name),
+                    it.loadLabel(pm).toString(), it.loadIcon(pm).toBitmap(96, 96).asImageBitmap(), type) }.getOrNull()
+            }
+    }.distinctBy { it.component }
 }
 
-internal fun MainActivity.sendSharedPage(item: SharedPage, format: ShareFormat, target: ComponentName?) {
-    fun launch(intent: Intent) {
-        if (!lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) return
-        try {
-            if (target == null) startActivity(Intent.createChooser(intent, null))
-            else {
-                startActivity(intent.setComponent(target))
-                if (!item.secret) {
-                    recentShareApps.remove(target)
-                    recentShareApps.add(0, target)
-                    if (recentShareApps.size > 4) recentShareApps.removeAt(recentShareApps.lastIndex)
-                }
-            }
-        } catch (_: ActivityNotFoundException) { notice("此共享目标已不可用") }
-          catch (_: SecurityException) { notice("此应用无法接收共享内容") }
-    }
+internal fun MainActivity.sendSharedPage(item: SharedPage, document: SharedDocument?, target: ComponentName?,
+    includeTitle: Boolean = false) {
+    if (!lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) return
     val site = item.site
-    val send = Intent(Intent.ACTION_SEND).setType(format.mime).putExtra(Intent.EXTRA_SUBJECT, site.name)
-    if (format != ShareFormat.Archive) {
-        val text = if (format == ShareFormat.WithTitle && site.name != site.url) site.name + "\n" + site.url else site.url
-        launch(send.putExtra(Intent.EXTRA_TEXT, text))
-        return
+    val send = Intent(Intent.ACTION_SEND).setType(document?.format?.mime ?: "text/plain")
+        .putExtra(Intent.EXTRA_SUBJECT, site.name).putExtra(Intent.EXTRA_TITLE, site.name)
+    if (document == null) {
+        val text = if (includeTitle && site.name != site.url) site.name + "\n" + site.url else site.url
+        send.putExtra(Intent.EXTRA_TEXT, text)
+    } else {
+        val uri = document.uri(this)
+        send.clipData = ClipData.newUri(contentResolver, document.name, uri)
+        send.putExtra(Intent.EXTRA_STREAM, uri).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
     }
-    val web = item.currentDocument()
-    if (web == null || item.secret) { notice("网页已更改，请重新打开共享面板"); return }
-    val directory = File(cacheDir, "shared-pages")
-    if (!directory.isDirectory && !directory.mkdirs()) { notice("无法创建网页归档"); return }
-    val cutoff = System.currentTimeMillis() - 24 * 60 * 60 * 1000L
-    directory.listFiles()?.filter { it.isFile && it.lastModified() < cutoff }?.forEach { it.delete() }
-    val file = File(directory, "${UUID.randomUUID()}.mht")
-    web.saveWebArchive(file.absolutePath, false) { result ->
-        if (result == null || file.length() == 0L || item.currentDocument() !== web) {
-            file.delete()
-            if (!isDestroyed) notice("无法共享此网页归档")
-        } else {
-            val uri = FileProvider.getUriForFile(this, "$packageName.sharedpages", file)
-            send.clipData = ClipData.newUri(contentResolver, site.name, uri)
-            launch(send.putExtra(Intent.EXTRA_STREAM, uri).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION))
+    try {
+        if (target == null) startActivity(Intent.createChooser(send, null))
+        else {
+            startActivity(send.setComponent(target))
+            if (!item.secret) {
+                recentShareApps.remove(target)
+                recentShareApps.add(0, target)
+                if (recentShareApps.size > 4) recentShareApps.removeAt(recentShareApps.lastIndex)
+            }
         }
-    }
+    } catch (_: ActivityNotFoundException) { notice("此共享目标已不可用") }
+      catch (_: SecurityException) { notice("此应用无法接收共享内容") }
 }
 
 internal fun MainActivity.printSharedPage(item: SharedPage) {

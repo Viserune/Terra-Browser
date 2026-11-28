@@ -6,6 +6,7 @@
     <uses-feature android:name="android.hardware.microphone" android:required="false"/>
     <queries>
         <intent><action android:name="android.intent.action.SEND"/><data android:mimeType="text/plain"/></intent>
+        <intent><action android:name="android.intent.action.SEND"/><data android:mimeType="application/pdf"/></intent>
         <intent><action android:name="android.intent.action.SEND"/><data android:mimeType="multipart/related"/></intent>
     </queries>
     <application android:label="Terra Browser" android:icon="@drawable/terra_icon" android:theme="@style/TerraTheme" android:allowBackup="false" android:usesCleartextTraffic="true">

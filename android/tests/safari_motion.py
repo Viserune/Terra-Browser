@@ -18,6 +18,9 @@ from PIL import Image, ImageStat
 
 class Pages(BaseHTTPRequestHandler):
     def do_GET(self):
+        if self.path.startswith("/share-article"):
+            from share_formats import fixture
+            return fixture(self)
         if self.path.startswith("/load-bar/"):
             from address_loading import fixture
             return fixture(self)
@@ -160,6 +163,7 @@ def main():
     parser.add_argument("--inspect-overview-frames",action="store_true",help="slow the test emulator's animation clock during the tablet overview recording")
     parser.add_argument("--address-loading",action="store_true",help="check the address field while a page resource is loading")
     parser.add_argument("--share-panel",action="store_true",help="exercise sharing, expansion, format selection and system handoff")
+    parser.add_argument("--share-formats",action="store_true",help="export PDF, Reader PDF and MHTML to an isolated test receiver and verify the files")
     parser.add_argument("--menu-drag", action="store_true", help="verify selection during the original long press")
     parser.add_argument("--menu-history", action="store_true", help="reach a hidden history entry with one held press")
     parser.add_argument("--bookmark-conflict", action="store_true", help="verify concurrent edits in separate browser tasks")
@@ -230,6 +234,10 @@ def main():
         port = site.server_port
         run("reverse",f"tcp:{port}",f"tcp:{port}")
         try:
+            if args.share_formats:
+                from share_formats import verify
+                verify(run,shell,locate,shot,port,prefix,args.screens,args.menu_record)
+                return
             if args.share_panel:
                 from share_panel import verify
                 verify(run,shell,locate,shot,port,prefix,args.menu_record,args.tablet)

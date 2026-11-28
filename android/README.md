@@ -26,6 +26,8 @@ python tests/safari_motion.py emulator-5554 --tablet --tablet-overview-motion --
 
 在专用模拟器运行 `python tests/safari_motion.py 设备序列号 --share-panel --screens screenshots` 可验证共享面板展开、收回、格式切换、拷贝和书签草稿，以及文本和网页归档交给系统选择器的过程。平板加上 `--tablet`，会额外检查面板锚点和面板外网页的亮度。两种布局均可加 `--menu-record share.mp4` 录屏。
 
+「选项」可在当前网页与阅读器排版之间切换 PDF。PDF 和 MHTML 网页归档（.mht）都能发给已安装的应用，也可以用「保存到文件」选择目录。PDF 的「标记」支持逐页画笔、撤销和重做。运行 `python tests/safari_motion.py 设备序列号 --share-formats --screens screenshots --menu-record formats.mp4` 可录下格式切换，并检查另一应用收到的文件、跨页插图、中英文文字与标记。测试使用 Android SDK、JDK、Android 本地调试签名、Pillow、NumPy 和 PyMuPDF，会临时安装一个只在本机接收测试文件的应用。
+
 手机地址栏支持跟手切换标签。平板宽度足够时使用顶部工具栏和标签条。长按链接可以预览、隐藏预览或打开目标。页面菜单可手动收起工具栏，再点域名恢复。
 
 玻璃使用 LiquidKit 1.0.0-alpha.3 和匹配的 Backdrop。WebView 提供背景像素，LiquidKit 负责折射、模糊和高光。完整运行时着色效果需要 Android 13 及以上。 两个 AAR 均来自 [LiquidKit v1.0.0-alpha.3 发布页](https://github.com/egysoloman/LiquidKit/releases/tag/v1.0.0-alpha.3)，可与发布附件列出的 SHA-256 核对。

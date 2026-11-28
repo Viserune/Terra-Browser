@@ -21,7 +21,7 @@ internal data class ReaderStyle(val theme: ReaderTheme = ReaderTheme.Auto, val s
 
 internal data class ReaderChapter(val id: String, val title: String, val level: Int)
 internal class ReaderArticle(val title: String, private val lang: String, private val body: String, val chapters: List<ReaderChapter>) {
-    fun html(style: ReaderStyle, tone: ReaderTheme): String = """
+    fun html(style: ReaderStyle, tone: ReaderTheme, forPdf: Boolean = false): String = """
         <!doctype html><html lang="${esc(lang)}"><head><meta charset="utf-8">
         <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src https: http:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
         <meta name="referrer" content="no-referrer"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -37,7 +37,8 @@ internal class ReaderArticle(val title: String, private val lang: String, privat
         figure{margin:1.2em 0}img{display:block;max-width:100%;height:auto;margin:.6em auto}
         figcaption{font-size:.84em}pre{overflow:auto;white-space:pre;padding:.6em;background:#8882}
         table{display:block;overflow-x:auto;border-collapse:collapse}td,th{padding:.35em .65em;border:1px solid #8887}
-        </style></head><body><main><h1>${esc(title)}</h1>$body</main></body></html>
+        ${if (forPdf) "main{padding:12px 16px;max-width:none}" else ""}
+        </style></head><body><main><h1>${esc(title)}</h1>${if (forPdf) body.replace("loading=\"lazy\"","loading=\"eager\"") else body}</main></body></html>
     """.trimIndent()
 
     companion object {

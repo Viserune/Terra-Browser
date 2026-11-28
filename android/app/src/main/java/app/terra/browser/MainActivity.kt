@@ -148,6 +148,7 @@ open class MainActivity : ComponentActivity() {
     internal var pageMenuAnchor by mutableStateOf<androidx.compose.ui.geometry.Offset?>(null)
     internal var shareAnchor by mutableStateOf<androidx.compose.ui.geometry.Offset?>(null)
     internal var sharedPage by mutableStateOf<SharedPage?>(null)
+    internal val shareSaver = ShareDocumentSaver(this)
     internal val recentShareApps = mutableStateListOf<android.content.ComponentName>()
     internal val downloadAnchor = mutableStateOf<androidx.compose.ui.geometry.Rect?>(null)
     internal val downloads by lazy { BrowserDownloads(this) }
@@ -224,6 +225,7 @@ open class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        shareSaver.restore(savedInstanceState)
         enableEdgeToEdge()
         BrowserLibrary.attach(this)
         val groups = runCatching { org.json.JSONObject(prefs.getString("tabGroups", "{}")) }.getOrDefault(org.json.JSONObject())
@@ -797,6 +799,7 @@ open class MainActivity : ComponentActivity() {
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
+        shareSaver.save(outState)
         if (!page.secret && sheet in librarySections) outState.putString("librarySection", sheet)
         if (!page.secret) bookmarkDraft?.let { outState.putBundle("bookmarkDraft", it.state()) }
         super.onSaveInstanceState(outState)

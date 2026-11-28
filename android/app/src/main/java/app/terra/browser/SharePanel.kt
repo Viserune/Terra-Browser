@@ -38,13 +38,16 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.DialogWindowProvider
 import io.liquidkit.LiquidKitIcon
 import io.liquidkit.LiquidKitSymbol
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 private typealias Symbol = LiquidKitSymbol
-private val LocalShareInk = compositionLocalOf { Color.Black }
+internal val LocalShareInk = compositionLocalOf { Color.Black }
 
-@Composable private fun Caption(text: String, size: Int, bold: Boolean = false, secondary: Boolean = false,
+@Composable internal fun ShareCaption(text: String, size: Int, bold: Boolean = false, secondary: Boolean = false,
                                center: Boolean = false, lines: Int = 1) {
     BasicText(text, maxLines=lines, overflow=TextOverflow.Ellipsis, style=TextStyle(
         color=LocalShareInk.current.copy(alpha=if (secondary) .62f else 1f), fontSize=size.sp, lineHeight=(size+3).sp,
@@ -84,18 +87,53 @@ private val LocalShareInk = compositionLocalOf { Color.Black }
         var continuation by remember { mutableStateOf<(() -> Unit)?>(null) }
         var more by remember { mutableStateOf(false) }
         val options = remember { MutableTransitionState(false) }
-        var format by remember { mutableStateOf(ShareFormat.Link) }
+        var format by remember { mutableStateOf(ShareFormat.Auto) }
+        var prepared by remember { mutableStateOf<SharedDocument?>(null) }
+        DisposableEffect(prepared?.pdf) {
+            val pdf=prepared?.pdf
+            onDispose { pdf?.close() }
+        }
+        var marking by remember { mutableStateOf<SharedDocument?>(null) }
+        var preparing by remember { mutableStateOf<Job?>(null) }
+        var preparationFailure by remember { mutableStateOf("") }
+        val scope = rememberCoroutineScope()
         val formats = item.formats
-        LaunchedEffect(formats) { if (format !in formats) format=ShareFormat.Link }
-        val apps by produceState(emptyList<ShareApp>(), format.mime) {
-            value = withContext(Dispatchers.IO) { a.shareApps(format.mime) }
+        LaunchedEffect(formats) { if (format !in formats) format=ShareFormat.Auto }
+        val apps by produceState(emptyList<ShareApp>(), format, formats.size) {
+            value = emptyList()
+            value = withContext(Dispatchers.IO) { a.shareApps(format, ShareFormat.Pdf in formats) }
         }
         fun dismiss(next: (() -> Unit)? = null) {
             if (!visible.targetState) return
             continuation = next
             visible.targetState = false
         }
+        fun document(wanted: ShareFormat, use: (SharedDocument) -> Unit) {
+            if (preparing?.isActive == true) return
+            prepared?.takeIf { it.format==wanted && it.file.isFile && item.currentDocument()!=null }?.let { use(it); return }
+            preparationFailure=""
+            preparing=scope.launch {
+                try {
+                    val result=a.prepareSharedDocument(item,wanted)
+                    if (a.sharedPage === item && visible.targetState) {
+                        prepared=result
+                        use(result)
+                    } else {
+                        result.pdf?.close()
+                        result.file.delete()
+                    }
+                } catch (cancel: CancellationException) { throw cancel }
+                  catch (failure: Exception) { preparationFailure=failure.localizedMessage ?: "无法准备共享文件" }
+                finally { if (preparing === coroutineContext[Job]) preparing=null }
+            }
+        }
+        fun send(app: ShareApp?) {
+            val wanted=app?.format ?: format
+            if (wanted==ShareFormat.Auto) dismiss { a.sendSharedPage(item,null,app?.component) }
+            else document(wanted) { file -> dismiss { a.sendSharedPage(item,file,app?.component) } }
+        }
         fun back() {
+            if (marking!=null) { marking=null; return }
             if (options.targetState) options.targetState=false else if (options.isIdle) dismiss()
         }
         LaunchedEffect(visible.isIdle, visible.currentState) {
@@ -141,7 +179,7 @@ private val LocalShareInk = compositionLocalOf { Color.Black }
                             .offset(x=left,y=if (above) anchorY-height else anchorY)
                             else Modifier.align(Alignment.BottomCenter).padding(bottom=4.dp)
                         val shape = if (tablet) popoverShape(pivot,above) else RoundedCornerShape(30.dp)
-                        val blocked = options.currentState || options.targetState || !options.isIdle
+                        val blocked = marking != null || options.currentState || options.targetState || !options.isIdle
                         AnimatedVisibility(visibleState=visible, modifier=placement,enter=EnterTransition.None,exit=ExitTransition.None) {
                             val extent by transition.animateFloat(transitionSpec={
                                 if (targetState==EnterExitState.Visible) spring(dampingRatio=.84f,stiffness=570f)
@@ -176,46 +214,25 @@ private val LocalShareInk = compositionLocalOf { Color.Black }
                                     },contentAlignment=Alignment.Center) {
                                         Box(Modifier.size(38.dp,5.dp).background(ink.copy(alpha=.22f),CircleShape))
                                     }
-                                    ShareContents(a,item,apps,more, { more=!more }, { options.targetState=true },
-                                        { target -> dismiss { a.sendSharedPage(item,format,target) } },::dismiss)
+                                    ShareContents(a,item,format,formats.size>1,apps,more,preparing?.isActive==true,preparationFailure,
+                                        { more=!more },{ options.targetState=true },::send,
+                                        copy={
+                                            if (format==ShareFormat.Auto) dismiss { a.copy(item.site.url) }
+                                            else document(format) { file -> dismiss { a.copySharedDocument(file,item.secret) } }
+                                        }, save={ document(format) { file -> dismiss { a.shareSaver.launch(file) } } },
+                                        mark={ document(format) { marking=it } }, dismiss=::dismiss)
                                 }
                             }
                         }
                     }
-                    AnimatedVisibility(visibleState=options,enter=fadeIn(tween(190)),exit=fadeOut(tween(150))) {
-                        BoxWithConstraints(Modifier.fillMaxSize().background(Color.Black.copy(alpha=.25f))
-                            .clickable(noRipple,indication=null) { options.targetState=false }.safeDrawingPadding().padding(16.dp),
-                            contentAlignment=Alignment.Center) {
-                            DialogGlassSurface(capture,Modifier.width(minOf(540.dp,maxWidth)).height(minOf(738.dp,maxHeight))
-                                .animateEnterExit(enter=scaleIn(tween(230),initialScale=.89f)+ slideInVertically(tween(230)) { it/9 },
-                                    exit=scaleOut(tween(140),targetScale=.94f))
-                                .semantics { paneTitle="共享选项" },RoundedCornerShape(30.dp),surface.copy(alpha=.98f),panelBlur=18.dp) {
-                                Column(Modifier.fillMaxSize().pointerInput(Unit) { detectTapGestures {} }
-                                    .verticalScroll(rememberScrollState()).padding(14.dp)) {
-                                    Box(Modifier.fillMaxWidth().height(44.dp),contentAlignment=Alignment.Center) {
-                                        Caption("选项",18,true)
-                                        Box(Modifier.align(Alignment.CenterStart).size(44.dp).clip(CircleShape)
-                                            .clickable(role=Role.Button) { options.targetState=false }
-                                            .semantics { contentDescription="关闭共享选项" },contentAlignment=Alignment.Center) {
-                                            LiquidKitIcon(Symbol.Close,ink)
-                                        }
-                                    }
-                                    Spacer(Modifier.height(26.dp))
-                                    Caption("发送形式",14,secondary=true)
-                                    Spacer(Modifier.height(6.dp))
-                                    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(ink.copy(alpha=.055f))) {
-                                        formats.forEach { candidate ->
-                                            Row(Modifier.fillMaxWidth().clickable(role=Role.RadioButton) { format=candidate }
-                                                .semantics { selected=(format==candidate) }.heightIn(min=52.dp).padding(horizontal=18.dp),
-                                                verticalAlignment=Alignment.CenterVertically) {
-                                                Box(Modifier.weight(1f)) { Caption(candidate.label,16) }
-                                                if (format==candidate) LiquidKitIcon(Symbol.Check,Color(0xff1674dc))
-                                            }
-                                        }
-                                    }
-                                }
-                            }
+                    ShareFormatOptions(options,formats,format,capture,surface,select={ next ->
+                        if (format!=next) {
+                            preparing?.cancel(); preparing=null; preparationFailure=""
+                            format=next
                         }
+                    },close={ options.targetState=false })
+                    marking?.let { file ->
+                        PdfMarkup(a,file,dark,close={ marking=null },apply={ updated -> prepared=updated; marking=null })
                     }
                 }
             }
@@ -223,9 +240,9 @@ private val LocalShareInk = compositionLocalOf { Color.Black }
     }
 }
 
-@Composable private fun ShareContents(a: MainActivity, item: SharedPage, apps: List<ShareApp>, more: Boolean,
-    toggle: () -> Unit, options: () -> Unit, send: (android.content.ComponentName?) -> Unit,
-    dismiss: ((() -> Unit)?) -> Unit) {
+@Composable private fun ShareContents(a: MainActivity, item: SharedPage, format: ShareFormat, hasOptions: Boolean,
+    apps: List<ShareApp>, more: Boolean, preparing: Boolean, error: String, toggle: () -> Unit, options: () -> Unit,
+    send: (ShareApp?) -> Unit, copy: () -> Unit, save: () -> Unit, mark: () -> Unit, dismiss: ((() -> Unit)?) -> Unit) {
     val ink = LocalShareInk.current
     val scroll = rememberScrollState()
     LaunchedEffect(more) { if (!more) scroll.animateScrollTo(0) }
@@ -234,15 +251,30 @@ private val LocalShareInk = compositionLocalOf { Color.Black }
     Column(Modifier.fillMaxWidth().verticalScroll(scroll).padding(horizontal=15.dp,vertical=12.dp)) {
         Row(Modifier.fillMaxWidth().heightIn(min=116.dp).padding(horizontal=7.dp),verticalAlignment=Alignment.CenterVertically) {
             val tileColor = if (ink.luminance()<.3f) Color.White.copy(alpha=.88f) else ink.copy(alpha=.09f)
-            Box(Modifier.size(64.dp).background(tileColor,RoundedCornerShape(14.dp)),contentAlignment=Alignment.Center) {
-                if (favicon!=null) Image(favicon,null,Modifier.size(34.dp))
-                else LiquidKitIcon(Symbol.Globe,ink.copy(alpha=.65f),Modifier.size(32.dp))
+            val iconBackground by animateColorAsState(if (format==ShareFormat.Auto) tileColor else Color.Transparent,
+                tween(140),label="共享图标底色")
+            Box(Modifier.size(64.dp).background(iconBackground,RoundedCornerShape(14.dp)),contentAlignment=Alignment.Center) {
+                Crossfade(format,animationSpec=tween(140),label="共享文件图标") { shown ->
+                    Box(Modifier.size(52.dp),contentAlignment=Alignment.Center) {
+                        if (shown==ShareFormat.Auto && favicon!=null) Image(favicon,null,Modifier.size(34.dp))
+                        else if (shown==ShareFormat.Auto) LiquidKitIcon(Symbol.Globe,ink.copy(alpha=.65f),Modifier.size(32.dp))
+                        else ShareFileIcon(shown)
+                    }
+                }
             }
             Column(Modifier.weight(1f).padding(start=14.dp)) {
-                Caption(item.site.name,16,true,lines=2)
-                Caption(item.domain,14,secondary=true)
-                Box(Modifier.padding(top=5.dp).clip(CircleShape).background(ink.copy(alpha=.055f))
-                    .clickable(role=Role.Button,onClick=options).padding(horizontal=14.dp,vertical=6.dp)) { Caption("选项 ›",14,true) }
+                ShareCaption(item.site.name,16,true,lines=2)
+                val detail=when {
+                    error.isNotBlank() -> error
+                    preparing -> "正在准备文件…"
+                    format.pdf -> "PDF 文稿"
+                    format==ShareFormat.Archive -> "网页归档"
+                    else -> item.domain
+                }
+                AnimatedContent(detail,transitionSpec={ fadeIn(tween(140)) togetherWith fadeOut(tween(90)) },
+                    label="共享内容类型") { ShareCaption(it,14,secondary=true,lines=2) }
+                if (hasOptions) Box(Modifier.padding(top=5.dp).clip(CircleShape).background(ink.copy(alpha=.055f))
+                    .clickable(role=Role.Button,onClick=options).padding(horizontal=14.dp,vertical=6.dp)) { ShareCaption("选项 ›",14,true) }
             }
         }
         Spacer(Modifier.fillMaxWidth().height(1.dp).background(separator))
@@ -250,19 +282,22 @@ private val LocalShareInk = compositionLocalOf { Color.Black }
             verticalAlignment=Alignment.CenterVertically) {
             Tile("系统推荐",Symbol.Share) { send(null) }
             if (!item.secret) a.recentShareApps.mapNotNull { key -> apps.find { it.component==key } }.forEach { app ->
-                AppTile(app) { send(app.component) }
+                AppTile(app) { send(app) }
             }
         }
         Spacer(Modifier.fillMaxWidth().height(1.dp).background(separator))
         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).heightIn(min=123.dp),
             verticalAlignment=Alignment.CenterVertically) {
-            apps.forEach { app -> AppTile(app) { send(app.component) } }
+            apps.forEach { app -> AppTile(app) { send(app) } }
             Tile("更多应用",Symbol.More) { send(null) }
         }
         Spacer(Modifier.fillMaxWidth().height(1.dp).background(separator))
         Row(Modifier.fillMaxWidth().padding(top=13.dp),horizontalArrangement=Arrangement.SpaceEvenly) {
-            Tile("拷贝",Symbol.Clipboard,small=true,modifier=Modifier.weight(1f)) { dismiss { a.copy(item.site.url) } }
-            if (!item.secret) {
+            Tile("拷贝",Symbol.Clipboard,small=true,modifier=Modifier.weight(1f),click=copy)
+            if (format!=ShareFormat.Auto) {
+                Tile("保存到文件",Symbol.Folder,small=true,modifier=Modifier.weight(1f),click=save)
+                if (format.pdf) Tile("标记",Symbol.Rename,small=true,modifier=Modifier.weight(1f),click=mark)
+            } else if (!item.secret) {
                 Tile("添加到书签",Symbol.Bookmark,small=true,modifier=Modifier.weight(1f)) { dismiss { a.editBookmark(item.site) } }
                 Tile("添加到阅读列表",Symbol.ListBulletRectangle,small=true,modifier=Modifier.weight(1f)) { dismiss { a.saveForLater(item.site) } }
             }
@@ -286,6 +321,7 @@ private val LocalShareInk = compositionLocalOf { Color.Black }
                 Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(ink.copy(alpha=.07f))) {
                     if (item.currentDocument()!=null) ActionRow("打印或存为 PDF",Symbol.Document) { dismiss { a.printSharedPage(item) } }
                     ActionRow("在新窗口中打开",Symbol.SquareOnSquare) { dismiss { BrowserWindowActivity.open(a,item.site.url,item.secret) } }
+                    if (format==ShareFormat.Auto) ActionRow("共享标题和链接",Symbol.Link) { dismiss { a.sendSharedPage(item,null,null,includeTitle=true) } }
                     ActionRow("使用系统共享",Symbol.Share) { send(null) }
                 }
             }
@@ -297,7 +333,7 @@ private val LocalShareInk = compositionLocalOf { Color.Black }
     Column(Modifier.width(84.dp).clip(RoundedCornerShape(16.dp)).clickable(role=Role.Button,onClick=click)
         .padding(vertical=6.dp),horizontalAlignment=Alignment.CenterHorizontally) {
         Image(app.icon,null,Modifier.size(64.dp))
-        Spacer(Modifier.height(6.dp)); Caption(app.label,12,center=true,lines=2)
+        Spacer(Modifier.height(6.dp)); ShareCaption(app.label,12,center=true,lines=2)
     }
 }
 
@@ -321,13 +357,13 @@ private val LocalShareInk = compositionLocalOf { Color.Black }
                 drawLine(ink,Offset(right.x+radius,center.y),Offset(size.width,center.y),stroke.width)
             } else LiquidKitIcon(icon,ink,Modifier.size(34.dp).graphicsLayer { rotationZ=angle })
         }
-        Spacer(Modifier.height(6.dp)); Caption(label,12,center=true,lines=2)
+        Spacer(Modifier.height(6.dp)); ShareCaption(label,12,center=true,lines=2)
     }
 }
 
 @Composable private fun ActionRow(label: String, symbol: Symbol, action: () -> Unit) {
     Row(Modifier.fillMaxWidth().clickable(role=Role.Button,onClick=action).heightIn(min=51.dp)
         .padding(horizontal=16.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(14.dp)) {
-        LiquidKitIcon(symbol,LocalShareInk.current); Caption(label,16)
+        LiquidKitIcon(symbol,LocalShareInk.current); ShareCaption(label,16)
     }
 }
