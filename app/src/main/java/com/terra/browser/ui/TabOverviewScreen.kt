@@ -513,15 +513,42 @@ fun TabOverviewScreen(
     val overviewBackdrop = rememberLiquidKitBackdrop()
     val statusBarTopDp = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
     val currentGroup by remember(state.tabGroups) {
-        derivedStateOf { state.tabGroups.getOrNull(pagerState.settledPage) ?: state.activeGroup }
+        derivedStateOf { state.tabGroups.getOrNull(pagerState.currentPage) ?: state.activeGroup }
     }
     val overviewDark = isDark || currentGroup.isPrivate
-    val overviewColors = liquidKitColors(overviewDark)
+    val rawOverviewColors = liquidKitColors(overviewDark)
+    val animatedOverviewInk by animateColorAsState(
+        targetValue = rawOverviewColors.ink,
+        animationSpec = tween(180),
+        label = "OverviewInk",
+    )
+    val animatedOverviewSecondary by animateColorAsState(
+        targetValue = rawOverviewColors.secondary,
+        animationSpec = tween(180),
+        label = "OverviewSecondary",
+    )
+    val overviewColors = remember(rawOverviewColors, animatedOverviewInk, animatedOverviewSecondary) {
+        rawOverviewColors.copy(ink = animatedOverviewInk, secondary = animatedOverviewSecondary)
+    }
+    val overviewDarkFractionProvider: () -> Float = {
+        if (isDark) {
+            1f
+        } else {
+            val groups = state.tabGroups
+            val lastIdx = groups.lastIndex.coerceAtLeast(0)
+            val pos = (pagerState.currentPage + pagerState.currentPageOffsetFraction)
+                .coerceIn(0f, lastIdx.toFloat())
+            val floorIdx = pos.toInt().coerceIn(0, lastIdx)
+            val ceilIdx = (floorIdx + 1).coerceIn(0, lastIdx)
+            val frac = (pos - floorIdx).coerceIn(0f, 1f)
+            val fPriv = if (groups.getOrNull(floorIdx)?.isPrivate == true) 1f else 0f
+            val cPriv = if (groups.getOrNull(ceilIdx)?.isPrivate == true) 1f else 0f
+            lerp(fPriv, cPriv, frac)
+        }
+    }
     val overviewBackdropEnabled by remember {
         derivedStateOf {
             latestOverviewProgress() >= 0.96f &&
-                !pagerState.isScrollInProgress &&
-                !isScrubbingGroupPill &&
                 !state.showSettingsSheet &&
                 !state.showLibrarySheet &&
                 !state.showShareSheet &&
@@ -566,16 +593,7 @@ fun TabOverviewScreen(
                     minRefreshIntervalMillis = 16L,
                 )
                 .drawBehind {
-                    val groups = state.tabGroups
-                    val lastIdx = groups.lastIndex.coerceAtLeast(0)
-                    val pos = (pagerState.currentPage + pagerState.currentPageOffsetFraction)
-                        .coerceIn(0f, lastIdx.toFloat())
-                    val floorIdx = pos.toInt().coerceIn(0, lastIdx)
-                    val ceilIdx = (floorIdx + 1).coerceIn(0, lastIdx)
-                    val frac = (pos - floorIdx).coerceIn(0f, 1f)
-                    val fPriv = if (groups.getOrNull(floorIdx)?.isPrivate == true) 1f else 0f
-                    val cPriv = if (groups.getOrNull(ceilIdx)?.isPrivate == true) 1f else 0f
-                    val darkT = if (isDark) 1f else lerp(fPriv, cPriv, frac)
+                    val darkT = overviewDarkFractionProvider().coerceIn(0f, 1f)
                     val topColor = lerpColor(Color(0xFFE7ECF6), Color(0xFF1B191D), darkT)
                     val midColor = lerpColor(Color(0xFFDFE6F2), Color(0xFF141519), darkT)
                     val botColor = lerpColor(Color(0xFFD9E1EE), Color(0xFF101318), darkT)
@@ -611,7 +629,7 @@ fun TabOverviewScreen(
 
             HorizontalPager(
                 state = pagerState,
-                beyondViewportPageCount = 0,
+                beyondViewportPageCount = 1,
                 flingBehavior = PagerDefaults.flingBehavior(
                     state = pagerState,
                     pagerSnapDistance = PagerSnapDistance.atMost(1),
@@ -1071,7 +1089,7 @@ fun TabOverviewScreen(
         OverviewProgressiveBlurEdge(
             backdrop = overviewBackdrop,
             height = statusBarTopDp + 78.dp,
-            isDark = overviewDark,
+            darkFractionProvider = overviewDarkFractionProvider,
             isTop = true,
             blurEnabled = overviewBackdropEnabled,
             modifier = Modifier.align(Alignment.TopCenter),
@@ -1096,7 +1114,10 @@ fun TabOverviewScreen(
                     isSearchActive = state.isOverviewSearchActive,
                     onToggleSearch = { state.isOverviewSearchActive = !state.isOverviewSearchActive },
                     onAddTab = { onCreateNewTab(currentGroup.id) },
-                    onDone = onCloseOverview,
+                    onDone = {
+                        state.selectGroup(currentGroup.id)
+                        onCloseOverview()
+                    },
                 )
             } else {
                 Row(
@@ -1199,7 +1220,7 @@ fun TabOverviewScreen(
             OverviewProgressiveBlurEdge(
                 backdrop = overviewBackdrop,
                 height = navBottomDp + if (layoutProfile == BrowserLayoutProfile.PHONE_LANDSCAPE) 78.dp else 108.dp,
-                isDark = overviewDark,
+                darkFractionProvider = overviewDarkFractionProvider,
                 isTop = false,
                 blurEnabled = overviewBackdropEnabled,
                 modifier = Modifier.align(Alignment.BottomCenter),
@@ -1287,7 +1308,10 @@ fun TabOverviewScreen(
                             selectedTabIds.clear()
                         },
                         onAddTab = { onCreateNewTab(currentGroup.id) },
-                        onDone = onCloseOverview,
+                        onDone = {
+                            state.selectGroup(currentGroup.id)
+                            onCloseOverview()
+                        },
                     )
                 }
             }
@@ -1494,7 +1518,7 @@ private fun TabletOverviewTopBar(
     onDone: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
-    val pillHighlightColor = if (state.activeGroup.isPrivate || liquidKitAppearance().dark) {
+    val pillHighlightColor = if (liquidKitAppearance().dark) {
         Color.White.copy(alpha = 0.16f)
     } else {
         Color.Black.copy(alpha = 0.08f)
@@ -1687,46 +1711,44 @@ private fun TabletOverviewTopBar(
 
 @Composable
 private fun OverviewProgressiveBlurEdge(
-    backdrop: Backdrop,
+    @Suppress("UNUSED_PARAMETER") backdrop: Backdrop,
     height: androidx.compose.ui.unit.Dp,
-    isDark: Boolean,
+    darkFractionProvider: () -> Float,
     isTop: Boolean,
-    blurEnabled: Boolean = true,
+    @Suppress("UNUSED_PARAMETER") blurEnabled: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
-    val baseColor = when {
-        isTop && isDark -> Color(0xFF141519)
-        isTop -> Color(0xFFE7ECF6)
-        isDark -> Color(0xFF0E1015)
-        else -> Color(0xFFE3EAF4)
-    }
-    val tintBrush = remember(isDark, isTop) {
-        if (isTop) {
-            Brush.verticalGradient(
-                0f to baseColor.copy(alpha = if (isDark) 0.90f else 0.88f),
-                0.24f to baseColor.copy(alpha = if (isDark) 0.78f else 0.74f),
-                0.52f to baseColor.copy(alpha = if (isDark) 0.48f else 0.44f),
-                0.76f to baseColor.copy(alpha = if (isDark) 0.18f else 0.16f),
-                0.90f to baseColor.copy(alpha = if (isDark) 0.04f else 0.03f),
-                1f to Color.Transparent,
-            )
-        } else {
-            Brush.verticalGradient(
-                0f to Color.Transparent,
-                0.18f to baseColor.copy(alpha = if (isDark) 0.16f else 0.14f),
-                0.38f to baseColor.copy(alpha = if (isDark) 0.46f else 0.40f),
-                0.62f to baseColor.copy(alpha = if (isDark) 0.76f else 0.70f),
-                0.84f to baseColor.copy(alpha = if (isDark) 0.91f else 0.88f),
-                1f to baseColor.copy(alpha = if (isDark) 0.97f else 0.96f),
-            )
-        }
-    }
     Box(
         modifier = modifier
             .fillMaxWidth()
             .height(height)
             .drawBehind {
-                drawRect(brush = tintBrush)
+                val darkT = darkFractionProvider().coerceIn(0f, 1f)
+                val baseColor = if (isTop) {
+                    lerpColor(Color(0xFFE7ECF6), Color(0xFF1B191D), darkT)
+                } else {
+                    lerpColor(Color(0xFFD9E1EE), Color(0xFF101318), darkT)
+                }
+                val brush = if (isTop) {
+                    Brush.verticalGradient(
+                        0f to baseColor.copy(alpha = lerp(0.88f, 0.90f, darkT)),
+                        0.24f to baseColor.copy(alpha = lerp(0.74f, 0.78f, darkT)),
+                        0.52f to baseColor.copy(alpha = lerp(0.44f, 0.48f, darkT)),
+                        0.76f to baseColor.copy(alpha = lerp(0.16f, 0.18f, darkT)),
+                        0.90f to baseColor.copy(alpha = lerp(0.03f, 0.04f, darkT)),
+                        1f to Color.Transparent,
+                    )
+                } else {
+                    Brush.verticalGradient(
+                        0f to Color.Transparent,
+                        0.18f to baseColor.copy(alpha = lerp(0.14f, 0.16f, darkT)),
+                        0.38f to baseColor.copy(alpha = lerp(0.40f, 0.46f, darkT)),
+                        0.62f to baseColor.copy(alpha = lerp(0.70f, 0.76f, darkT)),
+                        0.84f to baseColor.copy(alpha = lerp(0.88f, 0.91f, darkT)),
+                        1f to baseColor.copy(alpha = lerp(0.96f, 0.97f, darkT)),
+                    )
+                }
+                drawRect(brush = brush)
             },
     )
 }
@@ -2164,7 +2186,7 @@ private fun DynamicBottomGroupBar(
     }
 
     val activeGroup by remember(groups) {
-        derivedStateOf { groups.getOrNull(pagerState.settledPage) ?: state.activeGroup }
+        derivedStateOf { groups.getOrNull(pagerState.currentPage) ?: state.activeGroup }
     }
     val pagerSnapSpring = remember { LiquidKitSpring.swiftUI(0.33f, 0.94f).spec }
     val groupTabs = state.tabsInGroup(activeGroup.id)
@@ -2257,7 +2279,11 @@ private fun DynamicBottomGroupBar(
         val pillHeightPx = with(density) { 48.dp.toPx() }.roundToInt()
         val pagerWidthPx = with(density) { (fullWidth + 32.dp).toPx() }
         // Opaque muted tint because TabInkShader multiplies glyph alpha * ink.a inside the lens.
-        val unselectedTabInk = if (isDarkTheme) Color(0xFF9A9FA8) else Color(0xFF6E737D)
+        val unselectedTabInk by animateColorAsState(
+            targetValue = if (isDarkTheme) Color(0xFF9A9FA8) else Color(0xFF6E737D),
+            animationSpec = tween(180),
+            label = "UnselectedGroupTabInk",
+        )
 
         // Side [+] and [✓] stay composed and animate smoothly via graphicsLayer (zero unmount pop)
         LiquidKitIconButton(

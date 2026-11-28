@@ -1,7 +1,9 @@
 package com.terra.browser.ui
 
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -111,38 +113,57 @@ fun StartPage(
         }.collect { cb(it) }
     }
 
-    val bgBrush = remember(isPrivate, isDark) {
-        if (isPrivate) {
-            Brush.verticalGradient(
-                listOf(
-                    Color(0xFF1A1B1F),
-                    Color(0xFF141518),
-                    Color(0xFF101114),
-                ),
-            )
-        } else if (isDark) {
-            Brush.verticalGradient(
-                listOf(
-                    Color(0xFF141820),
-                    Color(0xFF111318),
-                    Color(0xFF0E1014),
-                ),
-            )
-        } else {
-            Brush.verticalGradient(
-                listOf(
-                    Color(0xFFF3F5FA),
-                    Color(0xFFEEF1F7),
-                    Color(0xFFE7ECF5),
-                ),
-            )
-        }
+    val topBg by animateColorAsState(
+        targetValue = when {
+            isPrivate -> Color(0xFF1A1B1F)
+            isDark -> Color(0xFF141820)
+            else -> Color(0xFFF3F5FA)
+        },
+        animationSpec = tween(220),
+        label = "StartTopBg",
+    )
+    val midBg by animateColorAsState(
+        targetValue = when {
+            isPrivate -> Color(0xFF141518)
+            isDark -> Color(0xFF111318)
+            else -> Color(0xFFEEF1F7)
+        },
+        animationSpec = tween(220),
+        label = "StartMidBg",
+    )
+    val botBg by animateColorAsState(
+        targetValue = when {
+            isPrivate -> Color(0xFF101114)
+            isDark -> Color(0xFF0E1014)
+            else -> Color(0xFFE7ECF5)
+        },
+        animationSpec = tween(220),
+        label = "StartBotBg",
+    )
+    val bgBrush = remember(topBg, midBg, botBg) {
+        Brush.verticalGradient(listOf(topBg, midBg, botBg))
     }
 
-    val cardBg = if (isDark || isPrivate) Color.White.copy(alpha = 0.085f) else Color.White.copy(alpha = 0.78f)
-    val cardBorder = if (isDark || isPrivate) Color.White.copy(alpha = 0.10f) else Color.Black.copy(alpha = 0.06f)
-    val primaryInk = if (isPrivate) Color(0xFFF4F5F8) else colors.ink
-    val secondaryInk = if (isPrivate) Color(0xFF9EA2AE) else colors.secondary
+    val cardBg by animateColorAsState(
+        targetValue = if (isDark || isPrivate) Color.White.copy(alpha = 0.085f) else Color.White.copy(alpha = 0.78f),
+        animationSpec = tween(220),
+        label = "StartCardBg",
+    )
+    val cardBorder by animateColorAsState(
+        targetValue = if (isDark || isPrivate) Color.White.copy(alpha = 0.10f) else Color.Black.copy(alpha = 0.06f),
+        animationSpec = tween(220),
+        label = "StartCardBorder",
+    )
+    val primaryInk by animateColorAsState(
+        targetValue = if (isPrivate) Color(0xFFF4F5F8) else colors.ink,
+        animationSpec = tween(220),
+        label = "StartPrimaryInk",
+    )
+    val secondaryInk by animateColorAsState(
+        targetValue = if (isPrivate) Color(0xFF9EA2AE) else colors.secondary,
+        animationSpec = tween(220),
+        label = "StartSecondaryInk",
+    )
     val accentBlue = Color(0xFF0A84FF)
 
     val favCols = if (layoutProfile == BrowserLayoutProfile.PHONE_PORTRAIT) 4 else 6

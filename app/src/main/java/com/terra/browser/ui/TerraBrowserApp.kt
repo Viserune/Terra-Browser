@@ -52,6 +52,7 @@ import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -88,6 +89,8 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
+import androidx.core.view.WindowCompat
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -336,6 +339,15 @@ fun TerraBrowserApp(
         val triggerHaptic = rememberLiquidKitHaptics()
         val activeTab = state.activeTab
         val hostActivity = LocalContext.current as? android.app.Activity
+        val hostView = LocalView.current
+        val statusBarDarkSurface = appDark ||
+            (state.activeGroup.isPrivate && (state.isOverviewOpen || activeTab.isStartPage))
+        SideEffect {
+            val win = hostActivity?.window ?: return@SideEffect
+            val controller = WindowCompat.getInsetsController(win, hostView)
+            controller.isAppearanceLightStatusBars = !statusBarDarkSurface
+            controller.isAppearanceLightNavigationBars = !statusBarDarkSurface
+        }
 
         BackHandler(enabled = !state.showSettingsSheet) {
             when {
@@ -1043,7 +1055,7 @@ fun TerraBrowserApp(
                     topBarExtra = topBarExtra,
                     tabBarMode = state.tabBarMode,
                     isToolbarHidden = state.isToolbarHidden,
-                    isDark = appDark,
+                    isDark = appDark || (state.activeGroup.isPrivate && activeTab.isStartPage),
                     pageBackdrop = pageBackdrop,
                     modifier = Modifier.align(Alignment.TopCenter),
                 )
