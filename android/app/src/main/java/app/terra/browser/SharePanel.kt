@@ -22,6 +22,7 @@ import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
@@ -129,7 +130,8 @@ private val LocalShareInk = compositionLocalOf { Color.Black }
                         val anchorY = (y + if (above) (-3).dp else 3.dp).coerceIn(0.dp,maxHeight)
                         val room = (if (!tablet) maxHeight-10.dp else if (above) anchorY-6.dp else maxHeight-anchorY-8.dp)
                             .coerceAtLeast(tip+1.dp)
-                        val bodyHeight by animateDpAsState(if (more) room-tip else minOf(518.dp,room-tip),
+                        val compactHeight = if (tablet) 518.dp else 542.dp
+                        val bodyHeight by animateDpAsState(if (more) room-tip else minOf(compactHeight,room-tip),
                             spring(dampingRatio=.88f,stiffness=520f), label="共享面板高度")
                         var drag by remember { mutableFloatStateOf(0f) }
                         var dragging by remember { mutableStateOf(false) }
@@ -233,7 +235,8 @@ private val LocalShareInk = compositionLocalOf { Color.Black }
         Row(Modifier.fillMaxWidth().heightIn(min=116.dp).padding(horizontal=7.dp),verticalAlignment=Alignment.CenterVertically) {
             val tileColor = if (ink.luminance()<.3f) Color.White.copy(alpha=.88f) else ink.copy(alpha=.09f)
             Box(Modifier.size(64.dp).background(tileColor,RoundedCornerShape(14.dp)),contentAlignment=Alignment.Center) {
-                if (favicon!=null) Image(favicon,null,Modifier.size(34.dp)) else LiquidKitIcon(Symbol.Globe,ink.copy(alpha=.65f))
+                if (favicon!=null) Image(favicon,null,Modifier.size(34.dp))
+                else LiquidKitIcon(Symbol.Globe,ink.copy(alpha=.65f),Modifier.size(32.dp))
             }
             Column(Modifier.weight(1f).padding(start=14.dp)) {
                 Caption(item.site.name,16,true,lines=2)
@@ -243,7 +246,7 @@ private val LocalShareInk = compositionLocalOf { Color.Black }
             }
         }
         Spacer(Modifier.fillMaxWidth().height(1.dp).background(separator))
-        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).heightIn(min=126.dp),
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).heightIn(min=134.dp),
             verticalAlignment=Alignment.CenterVertically) {
             Tile("系统推荐",Symbol.Share) { send(null) }
             if (!item.secret) a.recentShareApps.mapNotNull { key -> apps.find { it.component==key } }.forEach { app ->
@@ -251,7 +254,7 @@ private val LocalShareInk = compositionLocalOf { Color.Black }
             }
         }
         Spacer(Modifier.fillMaxWidth().height(1.dp).background(separator))
-        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).heightIn(min=115.dp),
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).heightIn(min=123.dp),
             verticalAlignment=Alignment.CenterVertically) {
             apps.forEach { app -> AppTile(app) { send(app.component) } }
             Tile("更多应用",Symbol.More) { send(null) }
@@ -263,8 +266,8 @@ private val LocalShareInk = compositionLocalOf { Color.Black }
                 Tile("添加到书签",Symbol.Bookmark,small=true,modifier=Modifier.weight(1f)) { dismiss { a.editBookmark(item.site) } }
                 Tile("添加到阅读列表",Symbol.ListBulletRectangle,small=true,modifier=Modifier.weight(1f)) { dismiss { a.saveForLater(item.site) } }
             }
-            Tile(if (more) "查看更少" else "查看更多",Symbol.Forward,small=true,modifier=Modifier.weight(1f),
-                rotation=if (more) -90f else 90f,click=toggle)
+            Tile(if (more) "查看更少" else "查看更多",Symbol.ChevronDown,small=true,modifier=Modifier.weight(1f),
+                rotation=if (more) 180f else 0f,click=toggle)
         }
         AnimatedVisibility(visible=more,enter=fadeIn(tween(195))+expandVertically(expandFrom=Alignment.Top),
             exit=fadeOut(tween(135))+shrinkVertically(shrinkTowards=Alignment.Top)) {
@@ -293,7 +296,7 @@ private val LocalShareInk = compositionLocalOf { Color.Black }
 @Composable private fun AppTile(app: ShareApp, click: () -> Unit) {
     Column(Modifier.width(84.dp).clip(RoundedCornerShape(16.dp)).clickable(role=Role.Button,onClick=click)
         .padding(vertical=6.dp),horizontalAlignment=Alignment.CenterHorizontally) {
-        Image(app.icon,null,Modifier.size(58.dp))
+        Image(app.icon,null,Modifier.size(64.dp))
         Spacer(Modifier.height(6.dp)); Caption(app.label,12,center=true,lines=2)
     }
 }
@@ -305,9 +308,18 @@ private val LocalShareInk = compositionLocalOf { Color.Black }
     Column(modifier.then(if (small) Modifier else Modifier.width(84.dp)).clip(RoundedCornerShape(16.dp))
         .clickable(role=Role.Button,onClick=click).padding(vertical=6.dp,horizontal=2.dp),
         horizontalAlignment=Alignment.CenterHorizontally) {
-        Box(Modifier.size(if (small) 56.dp else 60.dp).background(ink.copy(alpha=.085f),
+        Box(Modifier.size(if (small) 62.dp else 64.dp).background(ink.copy(alpha=.085f),
             if (small) CircleShape else RoundedCornerShape(15.dp)),contentAlignment=Alignment.Center) {
-            LiquidKitIcon(icon,ink,Modifier.graphicsLayer { rotationZ=angle })
+            if (icon==Symbol.ListBulletRectangle && small) Canvas(Modifier.size(34.dp)) {
+                val radius=size.width*.20f
+                val stroke=Stroke(width=size.width*.065f)
+                val left=Offset(size.width*.25f,center.y)
+                val right=Offset(size.width*.75f,center.y)
+                drawCircle(ink,radius,left,style=stroke); drawCircle(ink,radius,right,style=stroke)
+                drawLine(ink,Offset(left.x+radius,center.y),Offset(right.x-radius,center.y),stroke.width)
+                drawLine(ink,Offset(0f,center.y),Offset(left.x-radius,center.y),stroke.width)
+                drawLine(ink,Offset(right.x+radius,center.y),Offset(size.width,center.y),stroke.width)
+            } else LiquidKitIcon(icon,ink,Modifier.size(34.dp).graphicsLayer { rotationZ=angle })
         }
         Spacer(Modifier.height(6.dp)); Caption(label,12,center=true,lines=2)
     }
