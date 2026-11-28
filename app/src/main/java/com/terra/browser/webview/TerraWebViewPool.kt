@@ -124,7 +124,7 @@ class TerraWebViewPool(
             existing.webView.onScrollDelta = { dy, scrollY ->
                 onScrollDelta(dy, scrollY)
                 if (kotlin.math.abs(dy) > 4) {
-                    scheduleSnapshot(tab.id, delayMs = 1800L)
+                    scheduleSnapshot(tab.id, delayMs = 450L)
                 }
             }
             applyTabSettings(existing, tab, appDark)
@@ -160,7 +160,7 @@ class TerraWebViewPool(
         wv.onScrollDelta = { dy, scrollY ->
             onScrollDelta(dy, scrollY)
             if (kotlin.math.abs(dy) > 4) {
-                scheduleSnapshot(tab.id, delayMs = 1800L)
+                scheduleSnapshot(tab.id, delayMs = 450L)
             }
         }
         wv.onLongPressHit = { hit ->
@@ -660,6 +660,19 @@ class TerraWebViewPool(
         mainHandler.postDelayed(task, delayMs)
     }
 
+    fun hasFreshSnapshot(tabId: String, maxAgeMs: Long = 1500L): Boolean {
+        val entry = entries[tabId] ?: return state.thumbnails.containsKey(tabId)
+        val currentUrl = entry.webView.url.orEmpty().ifBlank { entry.loadedUrl }
+        if (!state.thumbnails.containsKey(tabId) || thumbnailUrls[tabId] != currentUrl) return false
+        val lastAt = lastSnapshotAtMs[tabId] ?: 0L
+        return (System.currentTimeMillis() - lastAt) <= maxAgeMs
+    }
+
+    fun ensureSnapshotForTransition(tabId: String) {
+        if (hasFreshSnapshot(tabId, maxAgeMs = 1500L)) return
+        captureSnapshotSync(tabId, force = true)
+    }
+
     fun captureSnapshotSync(tabId: String, force: Boolean = true): ImageBitmap? {
         val entry = entries[tabId] ?: return state.thumbnails[tabId]
         val wv = entry.webView
@@ -670,7 +683,7 @@ class TerraWebViewPool(
             return state.thumbnails[tabId]
         }
         val currentUrl = wv.url.orEmpty().ifBlank { entry.loadedUrl }
-        val scale = minOf(1f, 540f / w.toFloat(), 1080f / h.toFloat()).coerceIn(0.2f, 1f)
+        val scale = minOf(1f, 440f / w.toFloat(), 880f / h.toFloat()).coerceIn(0.2f, 1f)
         val bmpW = (w * scale).roundToInt().coerceAtLeast(1)
         val bmpH = (h * scale).roundToInt().coerceAtLeast(1)
         val bitmap = runCatching {

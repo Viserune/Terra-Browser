@@ -31,7 +31,9 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.displayCutoutPadding
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
@@ -41,7 +43,9 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -68,6 +72,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
@@ -144,22 +149,41 @@ import kotlin.math.roundToInt
 import kotlin.math.sign
 import kotlin.math.sin
 
-private data class HeroBottomClipShape(
-    val visibleH: Float,
-    val cornerPx: Float,
-) : Shape {
-    override fun createOutline(
-        size: Size,
-        layoutDirection: LayoutDirection,
-        density: Density,
-    ): Outline = Outline.Rounded(
-        RoundRect(
-            left = 0f,
-            top = 0f,
-            right = size.width,
-            bottom = minOf(size.height, visibleH),
-            cornerRadius = CornerRadius(cornerPx, cornerPx),
+private data class LiftCardGeometry(
+    val rect: Rect,
+    val cornerDp: Float,
+)
+
+private fun computeDragLiftGeometry(
+    curX: Float,
+    curY: Float,
+    rootW: Float,
+    rootH: Float,
+    cardAspectRatio: Float,
+): LiftCardGeometry {
+    val rawLift = (-curY / (rootH * 0.36f).coerceAtLeast(1f)).coerceAtLeast(0f)
+    val clampedLift = rawLift.coerceIn(0f, 1f)
+    val horizP = (abs(curX) / rootW.coerceAtLeast(1f)).coerceIn(0f, 1f)
+    val widthScale = lerp(1f, 0.48f, clampedLift) * lerp(1f, 0.968f, horizP * (1f - clampedLift))
+    val curW = (rootW * widthScale).coerceAtLeast(1f)
+    val fullScaledH = (rootH * widthScale).coerceAtLeast(1f)
+    val cardRatioH = (curW / cardAspectRatio.coerceAtLeast(0.4f)).coerceAtMost(fullScaledH)
+    val curH = lerp(fullScaledH, cardRatioH, clampedLift * 0.72f)
+    val extraUp = if (rawLift > 1f) rubberBand(rawLift - 1f, 0.14f) * rootH * 0.25f else 0f
+    val centerX = rootW * 0.5f + curX * lerp(1f, 0.72f, clampedLift)
+    val centerY = rootH * 0.5f + curY * 0.62f - extraUp
+    val cornerDp = maxOf(
+        lerp(0f, 26f, clampedLift),
+        lerp(0f, 18f, (horizP * 2.2f).coerceIn(0f, 1f)),
+    )
+    return LiftCardGeometry(
+        rect = Rect(
+            left = centerX - curW * 0.5f,
+            top = centerY - curH * 0.5f,
+            right = centerX + curW * 0.5f,
+            bottom = centerY + curH * 0.5f,
         ),
+        cornerDp = cornerDp,
     )
 }
 
@@ -193,7 +217,7 @@ fun TerraBrowserApp(
         val density = LocalDensity.current
 
         val cardBoundsMap = remember { HashMap<String, Rect>() }
-        val overviewProgress = remember { Animatable(if (state.isOverviewOpen) 1f else 0f) }
+        val overviewProgress = remember { Animatable(if (state.isOverviewOpen) 1f else 0f, visibilityThreshold = 0.004f) }
         var liveDragX by remember { mutableFloatStateOf(0f) }
         var rawDragX by remember { mutableFloatStateOf(0f) }
         var liveDragY by remember { mutableFloatStateOf(0f) }
@@ -202,129 +226,98 @@ fun TerraBrowserApp(
         val settleDragY = remember { Animatable(0f) }
         var isSettlingBarDrag by remember { mutableStateOf(false) }
         var barGestureJob by remember { mutableStateOf<Job?>(null) }
-        var releaseFromRect by remember { mutableStateOf<Rect?>(null) }
-        var closingFromRect by remember { mutableStateOf<Rect?>(null) }
-        var morphingTabId by remember { mutableStateOf<String?>(null) }
-        var pendingOverviewSelectionTabId by remember { mutableStateOf<String?>(null) }
-        var pendingOverviewSelectionRect by remember { mutableStateOf<Rect?>(null) }
+        var releaseStartRect by remember { mutableStateOf<Rect?>(null) }
         var releaseStartCornerDp by remember { mutableFloatStateOf(24f) }
+        var releaseStartP by remember { mutableFloatStateOf(0f) }
         var pendingReleaseVelocity by remember { mutableFloatStateOf(0f) }
+        var morphTargetRectOverride by remember { mutableStateOf<Rect?>(null) }
+        var closingOverrideRect by remember { mutableStateOf<Rect?>(null) }
+        var closingOverrideCornerDp by remember { mutableFloatStateOf(18f) }
+        var closingOverrideP by remember { mutableFloatStateOf(1f) }
         var settledWebViewTabId by remember { mutableStateOf<String?>(null) }
-        val releaseMorphProgress = remember { Animatable(0f) }
         val addressEditProgress = remember { Animatable(if (state.isAddressEditing) 1f else 0f) }
-        val heroOpenSpring = remember { LiquidKitSpring.swiftUI(0.35f, 0.96f) }
-        val heroCloseSpring = remember { LiquidKitSpring.swiftUI(0.30f, 0.94f) }
+        val heroOpenSpring = remember { LiquidKitSpring.swiftUI(0.32f, 0.88f) }
+        val heroCloseSpring = remember { LiquidKitSpring.swiftUI(0.30f, 0.88f) }
         val editSpring = remember { LiquidKitSpring.swiftUI(0.32f, 0.86f) }
         var lastRootWidthPx by remember { mutableFloatStateOf(1f) }
         var lastRootHeightPx by remember { mutableFloatStateOf(1f) }
+        var lastStatusBarTopPx by remember { mutableFloatStateOf(0f) }
+        var lastCutoutStartPx by remember { mutableFloatStateOf(0f) }
+        var lastCutoutEndPx by remember { mutableFloatStateOf(0f) }
+        var lastLayoutProfile by remember { mutableStateOf(BrowserLayoutProfile.PHONE_PORTRAIT) }
 
         LaunchedEffect(state.isOverviewOpen) {
             if (state.isOverviewOpen) {
                 val curTab = state.activeTab
-                if (!curTab.isStartPage && releaseFromRect == null && !state.thumbnails.containsKey(curTab.id)) {
-                    pool.captureSnapshotBeforeHide(curTab.id)
+                if (!curTab.isStartPage && releaseStartRect == null) {
+                    pool.ensureSnapshotForTransition(curTab.id)
                 }
-                pendingOverviewSelectionTabId = null
-                pendingOverviewSelectionRect = null
-                val activeId = state.activeTab.id
-                val curClosing = closingFromRect
-                if (curClosing != null) {
-                    val p = releaseMorphProgress.value.coerceIn(0f, 1f)
-                    val full = Rect(0f, 0f, lastRootWidthPx, lastRootHeightPx)
-                    releaseFromRect = androidx.compose.ui.geometry.lerp(full, curClosing, p)
-                    releaseStartCornerDp = lerp(0f, releaseStartCornerDp, p)
-                    closingFromRect = null
-                    morphingTabId = activeId
-                    releaseMorphProgress.snapTo(0f)
+                closingOverrideRect = null
+                val vel = if (releaseStartRect != null) {
+                    pendingReleaseVelocity.also { pendingReleaseVelocity = 0f }
+                } else {
+                    overviewProgress.velocity.coerceIn(-8f, 8f)
                 }
-                if (releaseFromRect != null) {
-                    val vel = pendingReleaseVelocity
-                    pendingReleaseVelocity = 0f
+                if (abs(overviewProgress.value - 1f) > 0.001f) {
                     try {
-                        coroutineScope {
-                            launch {
-                                overviewProgress.animateTo(
-                                    targetValue = 1f,
-                                    animationSpec = heroOpenSpring.spec,
-                                    initialVelocity = overviewProgress.velocity.coerceIn(-8f, 8f),
-                                )
-                            }
-                            launch {
-                                releaseMorphProgress.animateTo(
-                                    targetValue = 1f,
-                                    animationSpec = heroOpenSpring.spec,
-                                    initialVelocity = vel,
-                                )
-                            }
-                        }
+                        overviewProgress.animateTo(
+                            targetValue = 1f,
+                            animationSpec = heroOpenSpring.spec,
+                            initialVelocity = vel,
+                        )
                     } finally {
                         if (coroutineContext.isActive) {
-                            releaseFromRect = null
+                            releaseStartRect = null
+                            morphTargetRectOverride = null
                         }
                     }
-                } else if (abs(overviewProgress.value - 1f) > 0.001f) {
-                    overviewProgress.animateTo(
-                        targetValue = 1f,
-                        animationSpec = heroOpenSpring.spec,
-                        initialVelocity = overviewProgress.velocity.coerceIn(-8f, 8f),
-                    )
+                } else {
+                    releaseStartRect = null
+                    morphTargetRectOverride = null
                 }
             } else {
-                val activeId = state.activeTab.id
-                val pickedFromOverview = pendingOverviewSelectionTabId == activeId
-                val pickedRect = if (pickedFromOverview) {
-                    pendingOverviewSelectionRect ?: cardBoundsMap[activeId]
+                val curReleaseStart = releaseStartRect
+                if (curReleaseStart != null && overviewProgress.value < 0.99f) {
+                    val activeId = state.activeTab.id
+                    val targetRect = morphTargetRectOverride
+                        ?: cardBoundsMap[activeId]
+                        ?: computeExpectedOverviewCardRect(
+                            state = state,
+                            tabId = activeId,
+                            layoutProfile = lastLayoutProfile,
+                            rootWidthPx = lastRootWidthPx,
+                            rootHeightPx = lastRootHeightPx,
+                            statusBarTopPx = lastStatusBarTopPx,
+                            densityPx = density.density,
+                            cutoutStartPx = lastCutoutStartPx,
+                            cutoutEndPx = lastCutoutEndPx,
+                        )
+                    val t = ((overviewProgress.value - releaseStartP) / (1f - releaseStartP).coerceAtLeast(0.01f)).coerceIn(0f, 1f)
+                    closingOverrideRect = androidx.compose.ui.geometry.lerp(curReleaseStart, targetRect, t)
+                    closingOverrideCornerDp = lerp(releaseStartCornerDp, 18f, t)
+                    closingOverrideP = overviewProgress.value.coerceAtLeast(0.01f)
                 } else {
-                    null
+                    closingOverrideRect = null
                 }
-                pendingOverviewSelectionTabId = null
-                pendingOverviewSelectionRect = null
+                releaseStartRect = null
+                pendingReleaseVelocity = 0f
 
-                val curRelease = releaseFromRect
-                val fallbackGridRect = Rect(
-                    left = lastRootWidthPx * 0.25f,
-                    top = lastRootHeightPx * 0.22f,
-                    right = lastRootWidthPx * 0.75f,
-                    bottom = lastRootHeightPx * 0.58f,
-                )
-                if (pickedFromOverview && (curRelease != null || activeId != morphingTabId || overviewProgress.value < 0.99f)) {
-                    closingFromRect = pickedRect ?: fallbackGridRect
-                    releaseStartCornerDp = 18f
-                    releaseFromRect = null
-                    morphingTabId = activeId
-                    releaseMorphProgress.snapTo(1f)
-                } else {
-                    val targetRect = if (morphingTabId == activeId) cardBoundsMap[activeId] else null
-                    if (curRelease != null && targetRect != null && releaseMorphProgress.value < 0.99f) {
-                        val p = releaseMorphProgress.value.coerceIn(0f, 1f)
-                        closingFromRect = androidx.compose.ui.geometry.lerp(curRelease, targetRect, p)
-                        releaseStartCornerDp = lerp(releaseStartCornerDp, 18f, p)
-                        releaseFromRect = null
-                        releaseMorphProgress.snapTo(1f)
-                    } else {
-                        releaseFromRect = null
-                    }
-                }
-
-                if (closingFromRect != null) {
-                    val revOverviewVel = overviewProgress.velocity.coerceIn(-8f, 8f)
+                if (abs(overviewProgress.value) > 0.001f) {
                     try {
-                        coroutineScope {
-                            launch { overviewProgress.animateTo(0f, heroCloseSpring.spec, initialVelocity = revOverviewVel) }
-                            launch { releaseMorphProgress.animateTo(0f, heroCloseSpring.spec) }
-                        }
+                        overviewProgress.animateTo(
+                            targetValue = 0f,
+                            animationSpec = heroCloseSpring.spec,
+                            initialVelocity = overviewProgress.velocity.coerceIn(-8f, 8f),
+                        )
                     } finally {
                         if (coroutineContext.isActive) {
-                            closingFromRect = null
-                            morphingTabId = null
+                            closingOverrideRect = null
+                            morphTargetRectOverride = null
                         }
                     }
-                } else if (abs(overviewProgress.value) > 0.001f) {
-                    overviewProgress.animateTo(
-                        targetValue = 0f,
-                        animationSpec = heroCloseSpring.spec,
-                        initialVelocity = overviewProgress.velocity.coerceIn(-8f, 8f),
-                    )
+                } else {
+                    closingOverrideRect = null
+                    morphTargetRectOverride = null
                 }
             }
         }
@@ -499,40 +492,67 @@ fun TerraBrowserApp(
                         .weight(1f)
                         .fillMaxHeight(),
                 ) {
+                    val rootWidthDp = maxWidth
+                    val rootHeightDp = maxHeight
                     val rootWidthPx = with(density) { maxWidth.toPx() }.coerceAtLeast(1f)
                     val rootHeightPx = with(density) { maxHeight.toPx() }.coerceAtLeast(1f)
+                    val statusBarTopPx = with(density) { statusBarTopDp.toPx() }
+                    val cutoutPadding = WindowInsets.displayCutout.only(WindowInsetsSides.Horizontal).asPaddingValues()
+                    val cutoutStartPx = with(density) { cutoutPadding.calculateLeftPadding(LayoutDirection.Ltr).toPx() }
+                    val cutoutEndPx = with(density) { cutoutPadding.calculateRightPadding(LayoutDirection.Ltr).toPx() }
                     lastRootWidthPx = rootWidthPx
                     lastRootHeightPx = rootHeightPx
+                    lastStatusBarTopPx = statusBarTopPx
+                    lastCutoutStartPx = cutoutStartPx
+                    lastCutoutEndPx = cutoutEndPx
+                    lastLayoutProfile = layoutProfile
 
             val swipeGapPx = with(density) { 14.dp.toPx() }
             val swipeStepPx = rootWidthPx + swipeGapPx
             val activeGesture by remember { derivedStateOf { isBarDragging || isSettlingBarDrag } }
             val canSwipeToNewTab = state.peekAdjacentTab(+1) == null && !activeTab.isStartPage
+            val overviewCardAspectRatio = overviewCardAspectRatio(layoutProfile, maxWidth.value, maxHeight.value)
             var overviewWarmed by remember { mutableStateOf(false) }
             LaunchedEffect(Unit) {
                 delay(450L)
                 overviewWarmed = true
             }
+            val effectiveOverviewPProvider: () -> Float = {
+                val dragY = if (isBarDragging) liveDragY else settleDragY.value
+                val liftP = if (isBarDragging || isSettlingBarDrag) (-dragY / (rootHeightPx * 0.36f)).coerceIn(0f, 1f) else 0f
+                val dragPreview = if (liftP > 0.03f) ((liftP - 0.03f) / 0.62f).coerceIn(0f, 0.82f) else 0f
+                maxOf(overviewProgress.value.coerceIn(0f, 1f), dragPreview)
+            }
             val showOverviewLayer by remember(rootHeightPx) {
                 derivedStateOf {
-                    val dragY = if (isBarDragging) liveDragY else settleDragY.value
-                    val liftP = if (isBarDragging || isSettlingBarDrag) (-dragY / (rootHeightPx * 0.40f)).coerceIn(0f, 1f) else 0f
-                    val dragPreview = if (liftP > 0.06f) ((liftP - 0.06f) / 0.44f).coerceIn(0f, 0.78f) else 0f
-                    overviewProgress.value > 0.01f || dragPreview > 0.01f || releaseFromRect != null || closingFromRect != null
+                    effectiveOverviewPProvider() > 0.002f
                 }
             }
-            val isPageVisible by remember {
+            val isHeroMorphActive by remember {
                 derivedStateOf {
-                    overviewProgress.value < 0.99f || isBarDragging || isSettlingBarDrag || releaseFromRect != null || closingFromRect != null
+                    val p = overviewProgress.value
+                    isBarDragging ||
+                        isSettlingBarDrag ||
+                        closingOverrideRect != null ||
+                        (p > 0.003f && p < 0.994f) ||
+                        (state.isOverviewOpen && p < 0.994f) ||
+                        (!state.isOverviewOpen && p > 0.003f)
+                }
+            }
+            val isLivePageLayerVisible by remember {
+                derivedStateOf {
+                    !isHeroMorphActive && overviewProgress.value <= 0.002f && !state.isOverviewOpen
+                }
+            }
+            val isWebContentVisible by remember {
+                derivedStateOf {
+                    overviewProgress.value < 0.99f || !state.isOverviewOpen
                 }
             }
             val isTransitionInFlight by remember {
                 derivedStateOf {
-                    (overviewProgress.value > 0.01f && overviewProgress.value < 0.99f) ||
-                        isBarDragging ||
-                        isSettlingBarDrag ||
-                        releaseFromRect != null ||
-                        closingFromRect != null
+                    isHeroMorphActive ||
+                        (overviewProgress.value > 0.002f && overviewProgress.value < 0.998f)
                 }
             }
             LaunchedEffect(isTransitionInFlight) {
@@ -554,8 +574,6 @@ fun TerraBrowserApp(
                 derivedStateOf {
                     !state.isOverviewOpen &&
                         overviewProgress.value < 0.02f &&
-                        releaseFromRect == null &&
-                        closingFromRect == null &&
                         !isBarDragging &&
                         !isSettlingBarDrag &&
                         !hasBlockingModal
@@ -568,168 +586,66 @@ fun TerraBrowserApp(
                     state = state,
                     pool = pool,
                     backdrop = pageBackdrop,
-                    overviewProgress = overviewProgress,
-                    isBarDragging = { isBarDragging },
-                    isSettlingBarDrag = { isSettlingBarDrag },
-                    liveDragY = { liveDragY },
-                    settleDragY = settleDragY,
-                    rootHeightPx = rootHeightPx,
-                    hasReleaseMorph = { releaseFromRect != null || closingFromRect != null },
+                    effectiveOverviewPProvider = effectiveOverviewPProvider,
+                    isHeroMorphActive = { isHeroMorphActive },
                     cardBoundsMap = cardBoundsMap,
                     layoutProfile = layoutProfile,
                     onCardPicked = { pickedId, bounds ->
-                        pendingOverviewSelectionTabId = pickedId
-                        pendingOverviewSelectionRect = bounds
+                        releaseStartRect = null
+                        morphTargetRectOverride = bounds ?: computeExpectedOverviewCardRect(
+                            state = state,
+                            tabId = pickedId,
+                            layoutProfile = layoutProfile,
+                            rootWidthPx = rootWidthPx,
+                            rootHeightPx = rootHeightPx,
+                            statusBarTopPx = statusBarTopPx,
+                            densityPx = density.density,
+                            cutoutStartPx = cutoutStartPx,
+                            cutoutEndPx = cutoutEndPx,
+                        )
                     },
                 )
             }
 
-            // 2. Active Browser Page / Unified 2D Spatial Ribbon / 120fps GPU Hero Morph Layer
+            // 2. Active Browser Page Layer + Pure-GPU Zero-Hitch Hero Transition Overlay
             run {
-                val shapeCache = remember { HashMap<Int, RoundedCornerShape>() }
-                fun cachedRoundedShape(dpInt: Int): RoundedCornerShape =
-                    shapeCache.getOrPut(dpInt) { RoundedCornerShape(dpInt.dp) }
-
-                // Ambient spatial background & adjacent cards during drag
-                if (activeGesture) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .graphicsLayer {
-                                val curY = if (isBarDragging) liveDragY else settleDragY.value
-                                val liftP = (-curY / (rootHeightPx * 0.40f)).coerceIn(0f, 1f)
-                                val dragPreview = if (liftP > 0.06f) ((liftP - 0.06f) / 0.44f).coerceIn(0f, 0.78f) else 0f
-                                alpha = (1f - dragPreview).coerceIn(0f, 1f)
-                            }
-                            .background(if (appDark) Color(0xFF0D0F14) else Color(0xFFE7EBF2)),
-                    )
-
-                    listOf(-1, +1).forEach { delta ->
-                        val peekTab = state.peekAdjacentTab(delta)
-                        val showNewTabCard = peekTab == null && delta == +1 && canSwipeToNewTab
-                        if (peekTab != null || showNewTabCard) {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .graphicsLayer {
-                                        val curX = if (isBarDragging) liveDragX else settleDragX.value
-                                        val curY = if (isBarDragging) liveDragY else settleDragY.value
-                                        val liftP = (-curY / (rootHeightPx * 0.40f)).coerceIn(0f, 1f)
-                                        val horizP = (abs(curX) / rootWidthPx).coerceIn(0f, 1f)
-                                        val scale = lerp(1f, 0.48f, liftP) * lerp(1f, 0.972f, horizP * (1f - liftP))
-                                        val cornerDp = maxOf(
-                                            lerp(0f, 28f, liftP),
-                                            lerp(0f, 16f, (horizP * 2.2f).coerceIn(0f, 1f)),
-                                        )
-                                        val step = rootWidthPx * scale + swipeGapPx
-                                        translationX = curX * lerp(1f, 0.88f, liftP) + delta * step
-                                        translationY = curY * 0.56f
-                                        scaleX = scale
-                                        scaleY = scale
-                                        alpha = (1f - ((liftP - 0.16f) / 0.28f).coerceIn(0f, 1f))
-                                        if (cornerDp > 0.5f) {
-                                            clip = true
-                                            shape = cachedRoundedShape(cornerDp.roundToInt())
-                                        }
-                                    }
-                                    .background(if (appDark) Color(0xFF14171F) else Color(0xFFEEF1F7)),
-                            ) {
-                                AdjacentTabCardPreview(
-                                    state = state,
-                                    peekTab = peekTab,
-                                    appDark = appDark,
-                                    colors = colors,
-                                    topExtraPadding = topBarExtra,
-                                    layoutProfile = layoutProfile,
-                                )
-                            }
-                        }
-                    }
+                val wantDarkWebCss = when (activeTab.adaptiveDarkMode) {
+                    SiteDarkMode.ON -> true
+                    SiteDarkMode.OFF -> false
+                    SiteDarkMode.AUTO -> appDark
                 }
-
-                // Always keep layout size fillMaxSize() so live WebView never reflows or flashes black during hero morph
-                val pageModifier = Modifier
-                    .fillMaxSize()
-                    .zIndex(if (isPageVisible) 0f else -1f)
-                    .graphicsLayer {
-                        val visible = isPageVisible
-                        alpha = if (visible) 1f else 0f
-                        val pOverview = overviewProgress.value.coerceIn(0f, 1f)
-                        val editP = addressEditProgress.value.coerceIn(0f, 1f)
-                        val isGesture = isBarDragging || isSettlingBarDrag
-                        val curX = if (isBarDragging) liveDragX else settleDragX.value
-                        val curY = if (isBarDragging) liveDragY else settleDragY.value
-                        val curLiftP = if (isGesture) (-curY / (rootHeightPx * 0.40f)).coerceIn(0f, 1f) else 0f
-                        val curHorizP = if (isGesture) (abs(curX) / rootWidthPx).coerceIn(0f, 1f) else 0f
-                        val unifiedScale = lerp(1f, 0.48f, curLiftP) * lerp(1f, 0.972f, curHorizP * (1f - curLiftP))
-                        val unifiedCornerDp = maxOf(
-                            lerp(0f, 28f, curLiftP),
-                            lerp(0f, 16f, (curHorizP * 2.2f).coerceIn(0f, 1f)),
-                        )
-                        val targetRect = cardBoundsMap[activeTab.id]
-                        val releasedFrom = releaseFromRect
-                        val closingFrom = closingFromRect
-                        val morphP = releaseMorphProgress.value.coerceIn(0f, 1f)
-                        val fullRect = Rect(0f, 0f, rootWidthPx, rootHeightPx)
-
-                        val heroRect = when {
-                            isGesture -> null
-                            releasedFrom != null -> if (targetRect != null) {
-                                androidx.compose.ui.geometry.lerp(releasedFrom, targetRect, morphP)
-                            } else {
-                                releasedFrom
-                            }
-                            closingFrom != null -> androidx.compose.ui.geometry.lerp(fullRect, closingFrom, morphP)
-                            targetRect != null && pOverview > 0.001f -> androidx.compose.ui.geometry.lerp(fullRect, targetRect, pOverview)
-                            else -> null
-                        }
-
-                        if (heroRect != null) {
-                            val dynamicCornerDp = when {
-                                releasedFrom != null -> lerp(releaseStartCornerDp, 18f, morphP)
-                                closingFrom != null -> lerp(0f, releaseStartCornerDp, morphP)
-                                else -> lerp(0f, 18f, pOverview)
-                            }
-                            val s = (heroRect.width / rootWidthPx).coerceIn(0.05f, 1f)
-                            val visibleH = (heroRect.height / s).coerceIn(1f, rootHeightPx.coerceAtLeast(1f))
-                            val cornerPx = dynamicCornerDp * density.density / s
-                            transformOrigin = TransformOrigin(0f, 0f)
-                            translationX = heroRect.left
-                            translationY = heroRect.top
-                            scaleX = s
-                            scaleY = s
-                            clip = true
-                            shape = if (visibleH < rootHeightPx - 1f) {
-                                val qH = (visibleH * 2f).roundToInt() * 0.5f
-                                val qC = (cornerPx * 2f).roundToInt() * 0.5f
-                                HeroBottomClipShape(qH, qC)
-                            } else {
-                                cachedRoundedShape((cornerPx / density.density).roundToInt().coerceAtLeast(0))
-                            }
-                        } else {
-                            translationX = if (isGesture) curX * lerp(1f, 0.88f, curLiftP) else 0f
-                            translationY = if (isGesture) curY * 0.56f else 0f
-                            val s = (if (isGesture) unifiedScale else 1f) * lerp(1f, 0.965f, editP)
-                            scaleX = s
-                            scaleY = s
-                            if (isGesture && unifiedCornerDp > 0.5f) {
-                                clip = true
-                                shape = cachedRoundedShape(unifiedCornerDp.roundToInt())
-                            } else {
-                                clip = false
-                            }
-                        }
-                    }
+                val targetWebBg = when {
+                    state.extendWebsiteTint && activeTab.themeColorArgb != null -> Color(activeTab.themeColorArgb)
+                    wantDarkWebCss -> Color(0xFF141519)
+                    else -> Color.White
+                }
+                val webBgColor by animateColorAsState(
+                    targetValue = targetWebBg,
+                    animationSpec = spring(dampingRatio = 0.90f, stiffness = 420f),
+                    label = "WebThemeBg",
+                )
 
                 var edgeBackDragPx by remember { mutableFloatStateOf(0f) }
                 var edgeForwardDragPx by remember { mutableFloatStateOf(0f) }
                 var startPageScrollFraction by remember(activeTab.id) { mutableFloatStateOf(0f) }
 
+                // Live Page Host: NEVER scaled or shape-clipped, keeping Chromium HW layers 100% glitch-free.
+                val pageModifier = Modifier
+                    .fillMaxSize()
+                    .zIndex(if (isLivePageLayerVisible) 0f else -2f)
+                    .graphicsLayer {
+                        val editP = addressEditProgress.value.coerceIn(0f, 1f)
+                        alpha = if (isLivePageLayerVisible) 1f else 0f
+                        val s = lerp(1f, 0.965f, editP)
+                        scaleX = s
+                        scaleY = s
+                    }
+
                 Box(
                     modifier = pageModifier
                         .liquidKitBackdrop(
                             backdrop = pageBackdrop,
-                            enabled = isPageVisible,
+                            enabled = isLivePageLayerVisible,
                             scale = 0.5f,
                             frozen = !pageBackdropEnabled,
                             minRefreshIntervalMillis = 32L,
@@ -758,56 +674,31 @@ fun TerraBrowserApp(
                         )
                     } else {
                         val pullThresholdPx = with(density) { 72.dp.toPx() }
-                        val wantDarkWebCss = when (activeTab.adaptiveDarkMode) {
-                            SiteDarkMode.ON -> true
-                            SiteDarkMode.OFF -> false
-                            SiteDarkMode.AUTO -> appDark
-                        }
-                        val targetWebBg = when {
-                            state.extendWebsiteTint && activeTab.themeColorArgb != null -> Color(activeTab.themeColorArgb)
-                            wantDarkWebCss -> Color(0xFF141519)
-                            else -> Color.White
-                        }
-                        val webBgColor by animateColorAsState(
-                            targetValue = targetWebBg,
-                            animationSpec = spring(dampingRatio = 0.90f, stiffness = 420f),
-                            label = "WebThemeBg",
-                        )
                         val webBottomSafeDp = dockBottomClearanceDp.roundToInt().coerceAtLeast(0)
                         val showPullSpinner by remember(activeTab.id) {
                             derivedStateOf {
                                 isPullRefreshing || (if (isTopDragging) dragPullRefreshPx else pullRefreshAnim.value) > 4f
                             }
                         }
-                        val isHeroMorphActive by remember {
-                            derivedStateOf {
-                                overviewProgress.value > 0.005f ||
-                                    releaseFromRect != null ||
-                                    closingFromRect != null ||
-                                    isBarDragging ||
-                                    isSettlingBarDrag
-                            }
-                        }
                         val cachedWarm = remember(activeTab.id) { pool.isTabLoadedAndAttached(activeTab.id) }
-                        if (cachedWarm && isPageVisible && !isHeroMorphActive && settledWebViewTabId != activeTab.id) {
+                        if (cachedWarm && isLivePageLayerVisible && settledWebViewTabId != activeTab.id) {
                             settledWebViewTabId = activeTab.id
                         }
                         val veilAnim = remember(activeTab.id) {
-                            Animatable(if (settledWebViewTabId == activeTab.id && !isHeroMorphActive) 0f else 1f)
+                            Animatable(if (settledWebViewTabId == activeTab.id || cachedWarm) 0f else 1f)
                         }
                         val keepTransitionVeil by remember(activeTab.id) {
                             derivedStateOf {
                                 val hasThumb = state.thumbnails[activeTab.id] != null
-                                (isHeroMorphActive && hasThumb) ||
-                                    (settledWebViewTabId != activeTab.id && !pool.isTabLoadedAndAttached(activeTab.id)) ||
-                                    (settledWebViewTabId != activeTab.id && hasThumb)
+                                settledWebViewTabId != activeTab.id &&
+                                    (!pool.isTabLoadedAndAttached(activeTab.id) || hasThumb)
                             }
                         }
-                        LaunchedEffect(activeTab.id, isPageVisible, isHeroMorphActive) {
-                            if (!isPageVisible) {
+                        LaunchedEffect(activeTab.id, isWebContentVisible) {
+                            if (!isWebContentVisible) {
                                 settledWebViewTabId = null
-                            } else if (!isHeroMorphActive && settledWebViewTabId != activeTab.id) {
-                                delay(if (pool.isTabLoadedAndAttached(activeTab.id)) 320L else 450L)
+                            } else if (settledWebViewTabId != activeTab.id) {
+                                delay(if (pool.isTabLoadedAndAttached(activeTab.id)) 48L else 380L)
                                 if (settledWebViewTabId != activeTab.id) {
                                     settledWebViewTabId = activeTab.id
                                 }
@@ -817,7 +708,7 @@ fun TerraBrowserApp(
                             if (keepTransitionVeil) {
                                 veilAnim.snapTo(1f)
                             } else {
-                                veilAnim.animateTo(0f, tween(110, easing = FastOutSlowInEasing))
+                                veilAnim.animateTo(0f, tween(90, easing = FastOutSlowInEasing))
                             }
                         }
                         val showVeil by remember(activeTab.id) {
@@ -835,7 +726,7 @@ fun TerraBrowserApp(
                                 appDark = appDark,
                                 topSafeInsetPx = topSafeInsetPx,
                                 bottomSafeInsetDp = webBottomSafeDp,
-                                isVisible = isPageVisible,
+                                isVisible = isWebContentVisible,
                                 onScrollDelta = { dy, scrollY ->
                                     if (!state.isOverviewOpen && !state.isAddressEditing && !state.isToolbarHidden) {
                                         val nextMinimized = scrollTracker.onScroll(
@@ -928,6 +819,7 @@ fun TerraBrowserApp(
                                         colors = colors,
                                         topExtraPadding = topBarExtra,
                                         layoutProfile = layoutProfile,
+                                        topSafeOffsetPx = if (isTopDragging) dragTopSafeOffsetPx else topSafeOffsetAnim.value,
                                     )
                                 }
                             }
@@ -1057,21 +949,227 @@ fun TerraBrowserApp(
                     isToolbarHidden = state.isToolbarHidden,
                     isDark = appDark || (state.activeGroup.isPrivate && activeTab.isStartPage),
                     pageBackdrop = pageBackdrop,
-                    modifier = Modifier.align(Alignment.TopCenter),
+                    modifier = Modifier.align(Alignment.TopCenter).zIndex(1f),
                 )
+
+                // Pure-GPU Hero Transition Overlay (100% decouples animated zoom/clip/corner from Chromium Surface)
+                if (isHeroMorphActive) {
+                    val shapeCache = remember { HashMap<Int, RoundedCornerShape>() }
+                    fun cachedShape(dpInt: Int): RoundedCornerShape =
+                        shapeCache.getOrPut(dpInt) { RoundedCornerShape(dpInt.dp) }
+
+                    val fullRect = Rect(0f, 0f, rootWidthPx, rootHeightPx)
+                    val curX = if (isBarDragging) liveDragX else settleDragX.value
+                    val curY = if (isBarDragging) liveDragY else settleDragY.value
+                    val pOverview = overviewProgress.value.coerceIn(0f, 1f)
+                    val dragGeo = if (activeGesture) {
+                        computeDragLiftGeometry(curX, curY, rootWidthPx, rootHeightPx, overviewCardAspectRatio)
+                    } else {
+                        null
+                    }
+
+                    if (activeGesture && dragGeo != null) {
+                        val liftP = (-curY / (rootHeightPx * 0.36f)).coerceIn(0f, 1f)
+                        val dragPreview = if (liftP > 0.03f) ((liftP - 0.03f) / 0.62f).coerceIn(0f, 0.82f) else 0f
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .zIndex(1.5f)
+                                .graphicsLayer { alpha = (1f - dragPreview).coerceIn(0f, 1f) }
+                                .background(if (appDark) Color(0xFF0D0F14) else Color(0xFFE7EBF2)),
+                        )
+
+                        val adjStep = dragGeo.rect.width + swipeGapPx
+                        val adjScale = (dragGeo.rect.width / rootWidthPx).coerceIn(0.05f, 1.2f)
+                        listOf(-1, +1).forEach { delta ->
+                            val peekTab = state.peekAdjacentTab(delta)
+                            val showNewTabCard = peekTab == null && delta == +1 && canSwipeToNewTab
+                            if (peekTab != null || showNewTabCard) {
+                                val adjAlpha = (1f - ((liftP - 0.14f) / 0.28f).coerceIn(0f, 1f))
+                                if (adjAlpha > 0.01f) {
+                                    val adjSafeOffPx = if (peekTab != null && !peekTab.isStartPage) {
+                                        pool.currentTopSafeOffsetPx(peekTab.id, topSafeInsetPx) * (1f - liftP) * adjScale
+                                    } else {
+                                        0f
+                                    }
+                                    Box(
+                                        modifier = Modifier
+                                            .zIndex(1.5f)
+                                            .layout { measurable, _ ->
+                                                val w = dragGeo.rect.width.roundToInt().coerceAtLeast(1)
+                                                val h = dragGeo.rect.height.roundToInt().coerceAtLeast(1)
+                                                val placeable = measurable.measure(
+                                                    androidx.compose.ui.unit.Constraints.fixed(w, h),
+                                                )
+                                                layout(w, h) {
+                                                    placeable.placeRelative(0, 0)
+                                                }
+                                            }
+                                            .graphicsLayer {
+                                                translationX = dragGeo.rect.left + delta * adjStep
+                                                translationY = dragGeo.rect.top
+                                                alpha = adjAlpha
+                                                if (dragGeo.cornerDp > 0.5f) {
+                                                    clip = true
+                                                    shape = cachedShape(dragGeo.cornerDp.roundToInt())
+                                                }
+                                            }
+                                            .background(if (appDark) Color(0xFF14171F) else Color(0xFFEEF1F7)),
+                                    ) {
+                                        AdjacentTabCardPreview(
+                                            state = state,
+                                            peekTab = peekTab,
+                                            appDark = appDark,
+                                            colors = colors,
+                                            topExtraPadding = topBarExtra,
+                                            layoutProfile = layoutProfile,
+                                            topSafeOffsetPx = adjSafeOffPx,
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    val targetRect = morphTargetRectOverride
+                        ?: cardBoundsMap[activeTab.id]
+                        ?: computeExpectedOverviewCardRect(
+                            state = state,
+                            tabId = activeTab.id,
+                            layoutProfile = layoutProfile,
+                            rootWidthPx = rootWidthPx,
+                            rootHeightPx = rootHeightPx,
+                            statusBarTopPx = statusBarTopPx,
+                            densityPx = density.density,
+                            cutoutStartPx = cutoutStartPx,
+                            cutoutEndPx = cutoutEndPx,
+                        )
+                    val curReleaseStart = releaseStartRect
+                    val curClosingOverride = closingOverrideRect
+
+                    val heroRect: Rect
+                    val heroCornerDp: Float
+                    val flightProgress: Float
+                    when {
+                        dragGeo != null -> {
+                            heroRect = dragGeo.rect
+                            heroCornerDp = dragGeo.cornerDp
+                            flightProgress = (-curY / (rootHeightPx * 0.36f)).coerceIn(0f, 1f)
+                        }
+                        curReleaseStart != null -> {
+                            val t = ((pOverview - releaseStartP) / (1f - releaseStartP).coerceAtLeast(0.01f)).coerceIn(0f, 1f)
+                            heroRect = androidx.compose.ui.geometry.lerp(curReleaseStart, targetRect, t)
+                            heroCornerDp = lerp(releaseStartCornerDp, 18f, t)
+                            flightProgress = pOverview
+                        }
+                        curClosingOverride != null -> {
+                            val t = (pOverview / closingOverrideP.coerceAtLeast(0.01f)).coerceIn(0f, 1f)
+                            heroRect = androidx.compose.ui.geometry.lerp(fullRect, curClosingOverride, t)
+                            heroCornerDp = lerp(0f, closingOverrideCornerDp, t)
+                            flightProgress = t
+                        }
+                        else -> {
+                            heroRect = androidx.compose.ui.geometry.lerp(fullRect, targetRect, pOverview)
+                            heroCornerDp = lerp(0f, 18f, pOverview)
+                            flightProgress = pOverview
+                        }
+                    }
+
+                    val cardW = heroRect.width.coerceAtLeast(1f)
+                    val cardH = heroRect.height.coerceAtLeast(1f)
+                    val cardShape = cachedShape(heroCornerDp.roundToInt().coerceAtLeast(0))
+                    val elevDp = (sin(flightProgress.coerceIn(0f, 1f) * PI).toFloat() * 18f).dp
+                    val safeOffPx = if (isTopDragging) dragTopSafeOffsetPx else topSafeOffsetAnim.value
+
+                    Box(
+                        modifier = Modifier
+                            .zIndex(2f)
+                            .layout { measurable, _ ->
+                                val w = cardW.roundToInt().coerceAtLeast(1)
+                                val h = cardH.roundToInt().coerceAtLeast(1)
+                                val placeable = measurable.measure(
+                                    androidx.compose.ui.unit.Constraints.fixed(w, h),
+                                )
+                                layout(w, h) {
+                                    placeable.placeRelative(0, 0)
+                                }
+                            }
+                            .graphicsLayer {
+                                translationX = heroRect.left
+                                translationY = heroRect.top
+                            }
+                            .shadow(elevation = elevDp, shape = cardShape, clip = false)
+                            .clip(cardShape),
+                    ) {
+                        if (activeTab.isStartPage) {
+                            Box(
+                                modifier = Modifier
+                                    .requiredSize(rootWidthDp, rootHeightDp)
+                                    .graphicsLayer {
+                                        val s = (cardW / rootWidthPx).coerceIn(0.05f, 1.2f)
+                                        transformOrigin = TransformOrigin(0f, 0f)
+                                        scaleX = s
+                                        scaleY = s
+                                    },
+                            ) {
+                                StartPage(
+                                    state = state,
+                                    onOpenUrl = {},
+                                    onOpenUrlInNewTab = {},
+                                    onOpenReadingList = {},
+                                    onOpenPrivacyReport = {},
+                                    onOpenSettings = {},
+                                    topExtraPadding = topBarExtra,
+                                    layoutProfile = layoutProfile,
+                                )
+                            }
+                        } else {
+                            val thumb = state.thumbnails[activeTab.id]
+                            if (thumb != null) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .background(webBgColor),
+                                ) {
+                                    Image(
+                                        bitmap = thumb,
+                                        contentDescription = activeTab.title,
+                                        alignment = Alignment.TopCenter,
+                                        contentScale = ContentScale.Crop,
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .graphicsLayer {
+                                                val s = (cardW / rootWidthPx).coerceIn(0.05f, 1.2f)
+                                                translationY = lerp(safeOffPx, 0f, flightProgress) * s
+                                            },
+                                    )
+                                }
+                            } else {
+                                AdjacentTabCardPreview(
+                                    state = state,
+                                    peekTab = activeTab,
+                                    appDark = appDark,
+                                    colors = colors,
+                                    topExtraPadding = topBarExtra,
+                                    layoutProfile = layoutProfile,
+                                )
+                            }
+                        }
+                    }
+                }
             }
 
             val commitThreshold = rootWidthPx * 0.22f
             val swipeStepTargetPx = swipeStepPx
             val edgeBouncePx = with(density) { 68.dp.toPx() }
             val maxSwipeVel = rootWidthPx * 4.5f
-            val swipeCommitSpring = remember { LiquidKitSpring.swiftUI(0.31f, 0.96f) }
-            val swipeCancelSpring = remember { LiquidKitSpring.swiftUI(0.33f, 0.94f) }
+            val swipeCommitSpring = remember { LiquidKitSpring.swiftUI(0.28f, 0.90f) }
+            val swipeCancelSpring = remember { LiquidKitSpring.swiftUI(0.30f, 0.86f) }
             val handleBarDragStart: () -> Unit = {
                 barGestureJob?.cancel()
                 barGestureJob = null
                 if (!activeTab.isStartPage) {
-                    pool.captureSnapshotSync(activeTab.id, force = true)
+                    pool.ensureSnapshotForTransition(activeTab.id)
                 }
                 if (isSettlingBarDrag) {
                     liveDragX = settleDragX.value
@@ -1112,29 +1210,31 @@ fun TerraBrowserApp(
             val handleBarDragEnd: (Float, Float, Boolean) -> Unit = { vx, vy, allowOverview ->
                 val endX = liveDragX
                 val endY = liveDragY
-                val liftP = if (allowOverview) (-endY / (rootHeightPx * 0.40f)).coerceIn(0f, 1f) else 0f
-                val horizP = (abs(endX) / rootWidthPx).coerceIn(0f, 1f)
-                val endScale = lerp(1f, 0.48f, liftP) * lerp(1f, 0.972f, horizP * (1f - liftP))
-                val endCorner = maxOf(lerp(0f, 28f, liftP), lerp(0f, 16f, (horizP * 2.2f).coerceIn(0f, 1f)))
-                val endTx = endX * lerp(1f, 0.88f, liftP)
-                val endTy = endY * 0.56f
-                val dragOverviewPreview = if (liftP > 0.06f) ((liftP - 0.06f) / 0.44f).coerceIn(0f, 0.78f) else 0f
+                val liftP = if (allowOverview) (-endY / (rootHeightPx * 0.36f)).coerceIn(0f, 1f) else 0f
+                val dragOverviewPreview = if (liftP > 0.03f) ((liftP - 0.03f) / 0.62f).coerceIn(0f, 0.82f) else 0f
                 val clampedVx = vx.coerceIn(-maxSwipeVel, maxSwipeVel)
 
                 barGestureJob?.cancel()
                 barGestureJob = scope.launch {
                     when {
-                        allowOverview && (liftP >= 0.18f || (vy <= -420f && abs(vy) > abs(vx) * 0.75f)) -> {
-                            val w = rootWidthPx * endScale
-                            val h = rootHeightPx * endScale
-                            val left = (rootWidthPx - w) * 0.5f + endTx
-                            val top = (rootHeightPx - h) * 0.5f + endTy
-                            closingFromRect = null
-                            morphingTabId = activeTab.id
-                            releaseFromRect = Rect(left, top, left + w, top + h)
-                            releaseStartCornerDp = endCorner
-                            pendingReleaseVelocity = ((-vy / rootHeightPx) * 1.4f).coerceIn(0f, 4.5f)
-                            releaseMorphProgress.snapTo(0f)
+                        allowOverview && (liftP >= 0.16f || (vy <= -380f && abs(vy) > abs(vx) * 0.75f)) -> {
+                            val releaseGeo = computeDragLiftGeometry(endX, endY, rootWidthPx, rootHeightPx, overviewCardAspectRatio)
+                            closingOverrideRect = null
+                            morphTargetRectOverride = cardBoundsMap[activeTab.id] ?: computeExpectedOverviewCardRect(
+                                state = state,
+                                tabId = activeTab.id,
+                                layoutProfile = layoutProfile,
+                                rootWidthPx = rootWidthPx,
+                                rootHeightPx = rootHeightPx,
+                                statusBarTopPx = statusBarTopPx,
+                                densityPx = density.density,
+                                cutoutStartPx = cutoutStartPx,
+                                cutoutEndPx = cutoutEndPx,
+                            )
+                            releaseStartRect = releaseGeo.rect
+                            releaseStartCornerDp = releaseGeo.cornerDp
+                            releaseStartP = dragOverviewPreview
+                            pendingReleaseVelocity = (-vy / (rootHeightPx * 0.45f)).coerceIn(0f, 5.5f)
                             overviewProgress.snapTo(dragOverviewPreview)
                             isBarDragging = false
                             isSettlingBarDrag = false
@@ -1143,8 +1243,8 @@ fun TerraBrowserApp(
                             liveDragY = 0f
                             settleDragX.snapTo(0f)
                             settleDragY.snapTo(0f)
-                            if (!activeTab.isStartPage && !state.thumbnails.containsKey(activeTab.id)) {
-                                pool.captureSnapshotSync(activeTab.id, force = true)
+                            if (!activeTab.isStartPage) {
+                                pool.ensureSnapshotForTransition(activeTab.id)
                             }
                             state.isOverviewOpen = true
                         }
@@ -1232,23 +1332,31 @@ fun TerraBrowserApp(
                 pageBackdrop = pageBackdrop,
                 layoutProfile = layoutProfile,
                 swipeStepPx = swipeStepPx,
-                rootHeightPx = rootHeightPx,
-                overviewProgress = overviewProgress,
+                effectiveOverviewPProvider = effectiveOverviewPProvider,
                 addressEditProgress = addressEditProgress,
                 isBarDragging = { isBarDragging },
                 isSettlingBarDrag = { isSettlingBarDrag },
                 liveDragX = { liveDragX },
-                liveDragY = { liveDragY },
                 settleDragX = settleDragX,
-                settleDragY = settleDragY,
-                hasReleaseMorph = { releaseFromRect != null || closingFromRect != null },
                 onBarDragStart = handleBarDragStart,
                 onBarDragDelta = handleBarDragDelta,
                 onBarDragEnd = handleBarDragEnd,
                 onOpenOverview = {
                     if (!activeTab.isStartPage) {
-                        pool.captureSnapshotSync(activeTab.id, force = true)
+                        pool.ensureSnapshotForTransition(activeTab.id)
                     }
+                    releaseStartRect = null
+                    morphTargetRectOverride = cardBoundsMap[activeTab.id] ?: computeExpectedOverviewCardRect(
+                        state = state,
+                        tabId = activeTab.id,
+                        layoutProfile = layoutProfile,
+                        rootWidthPx = rootWidthPx,
+                        rootHeightPx = rootHeightPx,
+                        statusBarTopPx = statusBarTopPx,
+                        densityPx = density.density,
+                        cutoutStartPx = cutoutStartPx,
+                        cutoutEndPx = cutoutEndPx,
+                    )
                     state.isOverviewOpen = true
                 },
                 onOpenNewTab = {
@@ -1257,52 +1365,60 @@ fun TerraBrowserApp(
             )
 
             // 4. Address / Search Editing Overlay (100% opaque / Tablet in-place popover)
-            AddressOverlayHost(
-                state = state,
-                layoutProfile = layoutProfile,
-                addressEditProgress = addressEditProgress,
-            )
+            Box(Modifier.fillMaxSize().zIndex(10f)) {
+                AddressOverlayHost(
+                    state = state,
+                    layoutProfile = layoutProfile,
+                    addressEditProgress = addressEditProgress,
+                )
+            }
 
             // 4b. Safari Reader Mode Overlay
             val readerArticle = state.activeReaderArticle
             if (readerArticle != null && state.activeReaderTabId == activeTab.id && !state.isOverviewOpen) {
-                SafariReaderOverlay(
-                    tab = activeTab,
-                    article = readerArticle,
-                    readerStyle = state.readerStyle,
-                    appDark = appDark,
-                    onUpdateStyle = { state.readerStyle = it },
-                    onOpenUrl = { url -> state.navigateActiveTab(url) },
-                    onClose = { state.closeReader() },
-                )
+                Box(Modifier.fillMaxSize().zIndex(12f)) {
+                    SafariReaderOverlay(
+                        tab = activeTab,
+                        article = readerArticle,
+                        readerStyle = state.readerStyle,
+                        appDark = appDark,
+                        onUpdateStyle = { state.readerStyle = it },
+                        onOpenUrl = { url -> state.navigateActiveTab(url) },
+                        onClose = { state.closeReader() },
+                    )
+                }
             }
 
             // 5. All Safari Modals, Sheets & Web Context Menu
-            SafariModalsHost(
-                state = state,
-                pool = pool,
-                backdrop = pageBackdrop,
-                onNavigateUrl = { url -> state.navigateActiveTab(url) },
-                onOpenInNewTab = { url ->
-                    state.createTab(groupId = state.activeGroup.id, url = url, select = true, insertAfterActive = true)
-                },
-                onOpenInBackgroundTab = { url ->
-                    state.createTab(groupId = state.activeGroup.id, url = url, select = false, insertAfterActive = true)
-                },
-            )
+            Box(Modifier.fillMaxSize().zIndex(20f)) {
+                SafariModalsHost(
+                    state = state,
+                    pool = pool,
+                    backdrop = pageBackdrop,
+                    onNavigateUrl = { url -> state.navigateActiveTab(url) },
+                    onOpenInNewTab = { url ->
+                        state.createTab(groupId = state.activeGroup.id, url = url, select = true, insertAfterActive = true)
+                    },
+                    onOpenInBackgroundTab = { url ->
+                        state.createTab(groupId = state.activeGroup.id, url = url, select = false, insertAfterActive = true)
+                    },
+                )
+            }
 
             // 6. Floating Liquid Glass Status Toast Banner
-            LiquidKitToast(
-                visible = state.statusBannerMessage != null,
-                message = state.statusBannerMessage.orEmpty(),
-                symbol = LiquidKitSymbol.CheckCircleFilled,
-                tint = if (state.activeGroup.isPrivate && !appDark) Color(0xFF1F222A).copy(alpha = 0.84f) else Color.Unspecified,
-                autoDismissMillis = 1800L,
-                alignment = LiquidKitToastAlignment.Top,
-                respectSafeArea = true,
-                backdrop = pageBackdrop,
-                onDismiss = { state.statusBannerMessage = null },
-            )
+            Box(Modifier.fillMaxSize().zIndex(40f)) {
+                LiquidKitToast(
+                    visible = state.statusBannerMessage != null,
+                    message = state.statusBannerMessage.orEmpty(),
+                    symbol = LiquidKitSymbol.CheckCircleFilled,
+                    tint = if (state.activeGroup.isPrivate && !appDark) Color(0xFF1F222A).copy(alpha = 0.84f) else Color.Unspecified,
+                    autoDismissMillis = 1800L,
+                    alignment = LiquidKitToastAlignment.Top,
+                    respectSafeArea = true,
+                    backdrop = pageBackdrop,
+                    onDismiss = { state.statusBannerMessage = null },
+                )
+            }
                 } // end weight(1f) viewport BoxWithConstraints
             } // end TabletSidebar Row
         }
@@ -1317,6 +1433,7 @@ private fun AdjacentTabCardPreview(
     colors: io.liquidkit.LiquidKitColors,
     @Suppress("UNUSED_PARAMETER") topExtraPadding: androidx.compose.ui.unit.Dp,
     @Suppress("UNUSED_PARAMETER") layoutProfile: BrowserLayoutProfile = BrowserLayoutProfile.PHONE_PORTRAIT,
+    topSafeOffsetPx: Float = 0f,
 ) {
     if (peekTab == null || peekTab.isStartPage) {
         val isPrivate = state.activeGroup.isPrivate
@@ -1361,13 +1478,31 @@ private fun AdjacentTabCardPreview(
     } else {
         val thumb = state.thumbnails[peekTab.id]
         if (thumb != null) {
-            Image(
-                bitmap = thumb,
-                contentDescription = peekTab.title,
-                alignment = Alignment.TopCenter,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize(),
-            )
+            val peekDark = when (peekTab.adaptiveDarkMode) {
+                SiteDarkMode.ON -> true
+                SiteDarkMode.OFF -> false
+                SiteDarkMode.AUTO -> appDark
+            }
+            val peekBgColor = when {
+                state.extendWebsiteTint && peekTab.themeColorArgb != null -> Color(peekTab.themeColorArgb)
+                peekDark -> Color(0xFF141519)
+                else -> Color.White
+            }
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(peekBgColor),
+            ) {
+                Image(
+                    bitmap = thumb,
+                    contentDescription = peekTab.title,
+                    alignment = Alignment.TopCenter,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .graphicsLayer { translationY = topSafeOffsetPx },
+                )
+            }
         } else {
             Box(
                 modifier = Modifier
@@ -1415,36 +1550,14 @@ private fun OverviewLayerHost(
     state: TerraBrowserState,
     pool: TerraWebViewPool,
     backdrop: io.liquidkit.LiquidKitLayerBackdrop,
-    overviewProgress: Animatable<Float, AnimationVector1D>,
-    isBarDragging: () -> Boolean,
-    isSettlingBarDrag: () -> Boolean,
-    liveDragY: () -> Float,
-    settleDragY: Animatable<Float, AnimationVector1D>,
-    rootHeightPx: Float,
-    hasReleaseMorph: () -> Boolean,
+    effectiveOverviewPProvider: () -> Float,
+    isHeroMorphActive: () -> Boolean,
     cardBoundsMap: MutableMap<String, Rect>,
     layoutProfile: BrowserLayoutProfile,
     onCardPicked: (tabId: String, bounds: Rect?) -> Unit,
 ) {
-    val effectiveOverviewPProvider: () -> Float = {
-        val activeGesture = isBarDragging() || isSettlingBarDrag()
-        val curDragY = if (isBarDragging()) liveDragY() else settleDragY.value
-        val curLiftP = if (activeGesture) (-curDragY / (rootHeightPx * 0.40f)).coerceIn(0f, 1f) else 0f
-        val dragOverviewPreview = if (activeGesture && curLiftP > 0.06f) {
-            ((curLiftP - 0.06f) / 0.44f).coerceIn(0f, 0.78f)
-        } else {
-            0f
-        }
-        maxOf(overviewProgress.value.coerceIn(0f, 1f), dragOverviewPreview)
-    }
     val hiddenCardTabIdProvider: () -> String? = {
-        val activeGesture = isBarDragging() || isSettlingBarDrag()
-        val effectiveOverviewP = effectiveOverviewPProvider()
-        if (effectiveOverviewP < 0.99f || activeGesture || hasReleaseMorph()) {
-            state.activeTab.id
-        } else {
-            null
-        }
+        if (isHeroMorphActive()) state.activeTab.id else null
     }
     TabOverviewScreen(
         state = state,
@@ -1566,16 +1679,12 @@ private fun BoxScope.ChromeLayerHost(
     pageBackdrop: io.liquidkit.LiquidKitLayerBackdrop,
     layoutProfile: BrowserLayoutProfile,
     swipeStepPx: Float,
-    rootHeightPx: Float,
-    overviewProgress: Animatable<Float, AnimationVector1D>,
+    effectiveOverviewPProvider: () -> Float,
     addressEditProgress: Animatable<Float, AnimationVector1D>,
     isBarDragging: () -> Boolean,
     isSettlingBarDrag: () -> Boolean,
     liveDragX: () -> Float,
-    liveDragY: () -> Float,
     settleDragX: Animatable<Float, AnimationVector1D>,
-    settleDragY: Animatable<Float, AnimationVector1D>,
-    hasReleaseMorph: () -> Boolean,
     onBarDragStart: () -> Unit,
     onBarDragDelta: (Float, Float) -> Unit,
     onBarDragEnd: (Float, Float, Boolean) -> Unit,
@@ -1590,27 +1699,27 @@ private fun BoxScope.ChromeLayerHost(
     val editProgressProvider: () -> Float = { addressEditProgress.value.coerceIn(0f, 1f) }
     val topAlphaProvider: () -> Float = {
         val editP = editProgressProvider()
-        if (state.isAddressEditing) {
+        val editAlpha = if (state.isAddressEditing) {
             (1f - editP * 1.6f).coerceIn(0f, 1f)
         } else {
             (1f - editP).coerceIn(0f, 1f)
         }
+        val overviewFade = (1f - (effectiveOverviewPProvider() / 0.30f)).coerceIn(0f, 1f)
+        editAlpha * overviewFade
     }
     val dockAlphaProvider: () -> Float = {
-        val activeGesture = activeGestureProvider()
-        val curDragY = if (isBarDragging()) liveDragY() else settleDragY.value
-        val curLiftP = if (activeGesture) (-curDragY / (rootHeightPx * 0.40f)).coerceIn(0f, 1f) else 0f
-        val pOverview = overviewProgress.value.coerceIn(0f, 1f)
-        val dockPullFade = when {
-            hasReleaseMorph() || state.isOverviewOpen || pOverview >= 0.02f -> 0f
-            activeGesture -> (1f - (curLiftP / 0.20f)).coerceIn(0f, 1f)
-            else -> 1f
+        val effectiveP = effectiveOverviewPProvider()
+        val dockOverviewFade = (1f - (effectiveP / 0.30f)).coerceIn(0f, 1f)
+        val editAlpha = if (state.isAddressEditing) {
+            (1f - editProgressProvider() * 1.6f).coerceIn(0f, 1f)
+        } else {
+            (1f - editProgressProvider()).coerceIn(0f, 1f)
         }
-        topAlphaProvider() * dockPullFade
+        editAlpha * dockOverviewFade
     }
 
     if (layoutProfile == BrowserLayoutProfile.TABLET_LANDSCAPE) {
-        if (!state.isOverviewOpen) {
+        if (effectiveOverviewPProvider() < 0.35f) {
             TabletTopChrome(
                 state = state,
                 pool = pool,
@@ -1622,7 +1731,7 @@ private fun BoxScope.ChromeLayerHost(
                 onBarDragEnd = { vx, _ -> onBarDragEnd(vx, 0f, false) },
                 onOpenOverview = onOpenOverview,
                 onOpenNewTab = onOpenNewTab,
-                modifier = Modifier.align(Alignment.TopCenter),
+                modifier = Modifier.align(Alignment.TopCenter).zIndex(5f),
             )
         }
 
@@ -1632,6 +1741,7 @@ private fun BoxScope.ChromeLayerHost(
             exit = fadeOut() + slideOutVertically { it / 2 },
             modifier = Modifier
                 .align(Alignment.BottomCenter)
+                .zIndex(5f)
                 .navigationBarsPadding()
                 .displayCutoutPadding()
                 .imePadding()
@@ -1643,7 +1753,7 @@ private fun BoxScope.ChromeLayerHost(
     } else {
         if (layoutProfile != BrowserLayoutProfile.PHONE_LANDSCAPE &&
             state.tabBarMode == TabBarMode.TOP &&
-            !state.isOverviewOpen &&
+            effectiveOverviewPProvider() < 0.35f &&
             !state.isToolbarHidden
         ) {
             SafariTopAddressBar(
@@ -1656,7 +1766,7 @@ private fun BoxScope.ChromeLayerHost(
                 onBarDragDelta = { dx, _ -> onBarDragDelta(dx, 0f) },
                 onBarDragEnd = { vx, _ -> onBarDragEnd(vx, 0f, false) },
                 onOpenNewTab = onOpenNewTab,
-                modifier = Modifier.align(Alignment.TopCenter),
+                modifier = Modifier.align(Alignment.TopCenter).zIndex(5f),
             )
         }
 
@@ -1674,7 +1784,7 @@ private fun BoxScope.ChromeLayerHost(
             onBarDragEnd = { vx, vy -> onBarDragEnd(vx, vy, true) },
             onOpenOverview = onOpenOverview,
             onOpenNewTab = onOpenNewTab,
-            modifier = Modifier.align(Alignment.BottomCenter),
+            modifier = Modifier.align(Alignment.BottomCenter).zIndex(5f),
         )
     }
 }

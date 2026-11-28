@@ -481,7 +481,11 @@ fun SafariTopAddressBar(
     BoxWithConstraints(
         modifier = modifier
             .fillMaxWidth()
-            .graphicsLayer { alpha = latestAlphaFactor().coerceIn(0f, 1f) }
+            .graphicsLayer {
+                val a = latestAlphaFactor().coerceIn(0f, 1f)
+                alpha = a
+                translationY = -(1f - a) * 16.dp.toPx()
+            }
             .statusBarsPadding()
             .displayCutoutPadding()
             .padding(horizontal = 14.dp)
@@ -849,11 +853,6 @@ fun SafariBottomDock(
         animationSpec = dockSpring.spec,
         label = "DockCollapse",
     )
-    val dockAlphaState = animateFloatAsState(
-        targetValue = if (state.isOverviewOpen) 0f else 1f,
-        animationSpec = dockSpring.spec,
-        label = "DockAlpha",
-    )
     val latestAlphaFactor by rememberUpdatedState(alphaFactorProvider)
     val latestEditProgress by rememberUpdatedState(editProgressProvider)
     val latestSwipeFraction by rememberUpdatedState(tabSwipeFractionProvider)
@@ -878,7 +877,7 @@ fun SafariBottomDock(
         modifier = modifier
             .fillMaxWidth()
             .layout { measurable, constraints ->
-                val effectiveAlpha = (dockAlphaState.value * latestAlphaFactor()).coerceIn(0f, 1f)
+                val effectiveAlpha = latestAlphaFactor().coerceIn(0f, 1f)
                 val visible = effectiveAlpha > 0.008f ||
                     latestEditProgress() > 0.005f ||
                     state.isAddressEditing ||
@@ -890,7 +889,15 @@ fun SafariBottomDock(
                     layout(placeable.width, placeable.height) { placeable.placeRelative(0, 0) }
                 }
             }
-            .graphicsLayer { alpha = (dockAlphaState.value * latestAlphaFactor()).coerceIn(0f, 1f) },
+            .graphicsLayer {
+                val a = latestAlphaFactor().coerceIn(0f, 1f)
+                alpha = a
+                val hide = 1f - a
+                translationY = hide * 20.dp.toPx()
+                val s = lerp(1f, 0.95f, hide)
+                scaleX = s
+                scaleY = s
+            },
         contentAlignment = Alignment.BottomCenter,
     ) {
         val veilMaxHeight = when {
@@ -2180,7 +2187,7 @@ internal fun AddressPillSurface(
                     if (inCenter) {
                         isHoldingCenter = true
                     }
-                    val slop = viewConfiguration.touchSlop
+                    val slop = viewConfiguration.touchSlop * 0.65f
                     val vt = VelocityTracker()
                     vt.addPosition(down.uptimeMillis, down.position)
                     var totalDx = 0f

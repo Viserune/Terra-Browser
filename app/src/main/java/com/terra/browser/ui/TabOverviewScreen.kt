@@ -1,5 +1,6 @@
 package com.terra.browser.ui
 
+import android.os.Build
 import android.os.SystemClock
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
@@ -31,10 +32,12 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.absoluteOffset
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.defaultMinSize
+import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.displayCutoutPadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -43,6 +46,7 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
@@ -50,6 +54,7 @@ import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
@@ -91,6 +96,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.BlurEffect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.CompositingStrategy
@@ -179,6 +185,72 @@ private fun androidx.compose.ui.unit.Dp.coerceInSafe(
     minVal: androidx.compose.ui.unit.Dp,
     maxVal: androidx.compose.ui.unit.Dp,
 ): androidx.compose.ui.unit.Dp = coerceIn(minVal, maxOf(minVal, maxVal))
+
+internal fun overviewGridCols(layoutProfile: BrowserLayoutProfile, widthDp: Float, heightDp: Float): Int = when (layoutProfile) {
+    BrowserLayoutProfile.PHONE_PORTRAIT -> 2
+    BrowserLayoutProfile.PHONE_LANDSCAPE -> 3
+    BrowserLayoutProfile.TABLET_LANDSCAPE -> when {
+        widthDp < heightDp -> 3
+        widthDp >= 960f -> 4
+        else -> 3
+    }
+}
+
+internal fun overviewCardAspectRatio(layoutProfile: BrowserLayoutProfile, widthDp: Float, heightDp: Float): Float = when (layoutProfile) {
+    BrowserLayoutProfile.PHONE_PORTRAIT -> 0.68f
+    BrowserLayoutProfile.TABLET_LANDSCAPE -> if (widthDp < heightDp) 0.72f else 1.12f
+    BrowserLayoutProfile.PHONE_LANDSCAPE -> 1.16f
+}
+
+internal fun computeExpectedOverviewCardRect(
+    state: TerraBrowserState,
+    tabId: String,
+    layoutProfile: BrowserLayoutProfile,
+    rootWidthPx: Float,
+    rootHeightPx: Float,
+    statusBarTopPx: Float,
+    densityPx: Float,
+    cutoutStartPx: Float = 0f,
+    cutoutEndPx: Float = 0f,
+): Rect {
+    val tab = state.tabs.firstOrNull { it.id == tabId }
+    val group = tab?.let { t -> state.tabGroups.firstOrNull { it.id == t.groupId } } ?: state.activeGroup
+    val allTabs = state.tabsInGroup(group.id, includeSearchFilter = false)
+    val pinnedCount = allTabs.count { it.isPinned }
+    val regularTabs = allTabs.filter { !it.isPinned }
+    val idx = regularTabs.indexOfFirst { it.id == tabId }.coerceAtLeast(0)
+
+    val widthDp = rootWidthPx / densityPx.coerceAtLeast(1f)
+    val heightDp = rootHeightPx / densityPx.coerceAtLeast(1f)
+    val cols = overviewGridCols(layoutProfile, widthDp, heightDp)
+    val aspectRatio = overviewCardAspectRatio(layoutProfile, widthDp, heightDp)
+    val padH = 16f * densityPx
+    val gapH = 14f * densityPx
+    val gapV = 16f * densityPx
+    val titleRowH = 24f * densityPx
+    val isTablet = layoutProfile == BrowserLayoutProfile.TABLET_LANDSCAPE
+    val gridTopPad = statusBarTopPx + when {
+        isTablet -> 72f * densityPx
+        layoutProfile == BrowserLayoutProfile.PHONE_LANDSCAPE -> 54f * densityPx
+        else -> 64f * densityPx
+    }
+    var yOffset = gridTopPad
+    if (!group.isDefault) {
+        yOffset += 50f * densityPx
+    }
+    if (pinnedCount > 0) {
+        yOffset += 54f * densityPx
+    }
+
+    val usableW = (rootWidthPx - cutoutStartPx - cutoutEndPx).coerceAtLeast(1f)
+    val cardW = ((usableW - padH * 2f - gapH * (cols - 1)) / cols.toFloat()).coerceAtLeast(1f)
+    val previewH = cardW / aspectRatio
+    val col = idx % cols
+    val row = idx / cols
+    val left = cutoutStartPx + padH + col * (cardW + gapH)
+    val top = yOffset + row * (previewH + titleRowH + gapV)
+    return Rect(left, top, left + cardW, top + previewH)
+}
 
 @Composable
 fun TabOverviewScreen(
@@ -556,11 +628,17 @@ fun TabOverviewScreen(
         }
     }
 
+    val darkBackgroundAlpha = {
+        val p = latestOverviewProgress().coerceIn(0f, 1f)
+        val bgP = ((p - 0.02f) / 0.98f).coerceIn(0f, 1f)
+        (bgP * 1.45f).coerceIn(0f, 1f)
+    }
+
     Box(
         modifier = modifier
             .fillMaxSize()
             .layout { measurable, constraints ->
-                if (latestOverviewProgress() <= 0.005f) {
+                if (latestOverviewProgress() <= 0.002f) {
                     layout(0, 0) {}
                 } else {
                     val placeable = measurable.measure(constraints)
@@ -569,14 +647,15 @@ fun TabOverviewScreen(
                     }
                 }
             }
-            .then(if (isBlurred) Modifier.blur(10.dp) else Modifier)
             .graphicsLayer {
-                val p = latestOverviewProgress().coerceIn(0f, 1f)
-                compositingStrategy = if (p < 0.995f) CompositingStrategy.ModulateAlpha else CompositingStrategy.Auto
-                alpha = (p * 1.35f).coerceIn(0f, 1f)
-                val s = lerp(1.045f, 1f, p)
-                scaleX = s
-                scaleY = s
+                alpha = darkBackgroundAlpha()
+            }
+            .drawBehind {
+                val darkT = overviewDarkFractionProvider().coerceIn(0f, 1f)
+                val topColor = lerpColor(Color(0xFFE7ECF6), Color(0xFF1B191D), darkT)
+                val midColor = lerpColor(Color(0xFFDFE6F2), Color(0xFF141519), darkT)
+                val botColor = lerpColor(Color(0xFFD9E1EE), Color(0xFF101318), darkT)
+                drawRect(Brush.verticalGradient(listOf(topColor, midColor, botColor)))
             },
     ) {
         BoxWithConstraints(
@@ -588,31 +667,11 @@ fun TabOverviewScreen(
                     scale = 0.5f,
                     frozen = !overviewBackdropEnabled,
                     minRefreshIntervalMillis = 16L,
-                )
-                .drawBehind {
-                    val darkT = overviewDarkFractionProvider().coerceIn(0f, 1f)
-                    val topColor = lerpColor(Color(0xFFE7ECF6), Color(0xFF1B191D), darkT)
-                    val midColor = lerpColor(Color(0xFFDFE6F2), Color(0xFF141519), darkT)
-                    val botColor = lerpColor(Color(0xFFD9E1EE), Color(0xFF101318), darkT)
-                    drawRect(Brush.verticalGradient(listOf(topColor, midColor, botColor)))
-                },
+                ),
         ) {
             val isTablet = layoutProfile == BrowserLayoutProfile.TABLET_LANDSCAPE
-            val isPortraitTablet = isTablet && maxWidth < maxHeight
-            val gridCols = when (layoutProfile) {
-                BrowserLayoutProfile.PHONE_PORTRAIT -> 2
-                BrowserLayoutProfile.PHONE_LANDSCAPE -> 3
-                BrowserLayoutProfile.TABLET_LANDSCAPE -> when {
-                    isPortraitTablet -> 3
-                    maxWidth >= 960.dp -> 4
-                    else -> 3
-                }
-            }
-            val cardAspectRatio = when (layoutProfile) {
-                BrowserLayoutProfile.PHONE_PORTRAIT -> 0.68f
-                BrowserLayoutProfile.TABLET_LANDSCAPE -> if (isPortraitTablet) 0.72f else 1.12f
-                BrowserLayoutProfile.PHONE_LANDSCAPE -> 1.16f
-            }
+            val gridCols = overviewGridCols(layoutProfile, maxWidth.value, maxHeight.value)
+            val cardAspectRatio = overviewCardAspectRatio(layoutProfile, maxWidth.value, maxHeight.value)
             val gridTopPad = statusBarTopDp + when {
                 isTablet -> 72.dp
                 layoutProfile == BrowserLayoutProfile.PHONE_LANDSCAPE -> 54.dp
@@ -633,7 +692,28 @@ fun TabOverviewScreen(
                     snapAnimationSpec = pagerSnapSpring,
                     snapPositionalThreshold = 0.28f,
                 ),
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .graphicsLayer {
+                        val p = latestOverviewProgress().coerceIn(0f, 1f)
+                        val bgP = ((p - 0.02f) / 0.98f).coerceIn(0f, 1f)
+                        val s = lerp(0.935f, 1.0f, bgP)
+                        scaleX = s
+                        scaleY = s
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                            val blurT = 1f - ((p - 0.10f) / 0.90f).coerceIn(0f, 1f)
+                            val blurPx = if (p < 0.992f && blurT > 0.01f) {
+                                (blurT * blurT) * with(density) { 26.dp.toPx() }
+                            } else {
+                                0f
+                            }
+                            renderEffect = if (blurPx > 0.5f) {
+                                BlurEffect(blurPx, blurPx, TileMode.Clamp)
+                            } else {
+                                null
+                            }
+                        }
+                    },
             ) { pageIndex ->
                 val group = state.tabGroups.getOrNull(pageIndex) ?: return@HorizontalPager
                 val allGroupTabs = state.tabsInGroup(group.id, includeSearchFilter = true)
@@ -648,7 +728,7 @@ fun TabOverviewScreen(
                     columns = GridCells.Fixed(gridCols),
                     modifier = Modifier
                         .fillMaxSize()
-                        .displayCutoutPadding(),
+                        .windowInsetsPadding(WindowInsets.displayCutout.only(WindowInsetsSides.Horizontal)),
                     contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = gridTopPad, bottom = gridBottomPad),
                     horizontalArrangement = Arrangement.spacedBy(14.dp),
                     verticalArrangement = Arrangement.spacedBy(16.dp),
@@ -1045,7 +1125,7 @@ fun TabOverviewScreen(
                                     scaleY = cardScale
                                     val cwDenom = cardWidthPxRef[0].coerceAtLeast(1f) * 0.9f
                                     val swipeFade = 1f - (abs(tx) / cwDenom).coerceIn(0f, 0.88f)
-                                    alpha = if (tab.id == latestHiddenCardTabId() || latestContextCardTab?.id == tab.id) 0f else swipeFade
+                                    alpha = if (latestContextCardTab?.id == tab.id) 0f else swipeFade
                                 },
                         ) {
                             OverviewTabCard(
@@ -1060,9 +1140,13 @@ fun TabOverviewScreen(
                                 aspectRatio = cardAspectRatio,
                                 isSelectionMode = isSelectionMode,
                                 isSelected = isSelectedInMode,
+                                chromeAlphaProvider = {
+                                    ((latestOverviewProgress() - 0.65f) / 0.35f).coerceIn(0f, 1f)
+                                },
+                                hidePreviewProvider = { tab.id == latestHiddenCardTabId() },
                                 onPreviewPositioned = { rect ->
                                     previewBoundsRef[0] = rect
-                                    if (!pagerState.isScrollInProgress && !isDraggingThis && closingTabIds[tab.id] != true) {
+                                    if (latestOverviewProgress() >= 0.98f && !pagerState.isScrollInProgress && !isDraggingThis && closingTabIds[tab.id] != true) {
                                         cardBoundsMap[tab.id] = rect
                                     }
                                 },
@@ -1120,6 +1204,11 @@ fun TabOverviewScreen(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
+                        .graphicsLayer {
+                            val chromeP = ((latestOverviewProgress() - 0.32f) / 0.68f).coerceIn(0f, 1f)
+                            alpha = chromeP
+                            translationY = lerp(-12.dp.toPx(), 0f, chromeP)
+                        }
                         .statusBarsPadding()
                         .displayCutoutPadding()
                         .padding(horizontal = 16.dp, vertical = if (layoutProfile == BrowserLayoutProfile.PHONE_LANDSCAPE) 6.dp else 10.dp),
@@ -1232,6 +1321,11 @@ fun TabOverviewScreen(
             Box(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
+                    .graphicsLayer {
+                        val chromeP = ((latestOverviewProgress() - 0.32f) / 0.68f).coerceIn(0f, 1f)
+                        alpha = chromeP
+                        translationY = lerp(16.dp.toPx(), 0f, chromeP)
+                    }
                     .widthIn(max = barMaxWidth)
                     .then(if (state.isOverviewSearchActive) Modifier.imePadding() else Modifier)
                     .navigationBarsPadding()
@@ -1864,6 +1958,8 @@ private fun OverviewTabCard(
     aspectRatio: Float = 0.68f,
     isSelectionMode: Boolean = false,
     isSelected: Boolean = false,
+    chromeAlphaProvider: () -> Float = { 1f },
+    hidePreviewProvider: () -> Boolean = { false },
     onPreviewPositioned: ((Rect) -> Unit)? = null,
     onClose: () -> Unit,
 ) {
@@ -1885,19 +1981,14 @@ private fun OverviewTabCard(
                         onPreviewPositioned?.invoke(coords.boundsInRoot())
                     }
                 }
+                .graphicsLayer {
+                    alpha = if (hidePreviewProvider()) 0f else 1f
+                }
                 .clip(OverviewCardShape)
                 .background(cardSurface)
                 .border(
-                    width = when {
-                        isSelected || isDragged -> 2.6.dp
-                        isActive -> 2.2.dp
-                        else -> 0.75.dp
-                    },
-                    color = when {
-                        isSelected || isDragged || isActive -> accentBlue
-                        isDark -> Color.White.copy(alpha = 0.16f)
-                        else -> Color(0xFF1A2233).copy(alpha = 0.12f)
-                    },
+                    width = 0.75.dp,
+                    color = if (isDark) Color.White.copy(alpha = 0.16f) else Color(0xFF1A2233).copy(alpha = 0.12f),
                     shape = OverviewCardShape,
                 ),
         ) {
@@ -1913,6 +2004,21 @@ private fun OverviewTabCard(
                 MiniStartPagePreview(isPrivate = isPrivateGroup, isDark = isDark, favorites = favorites)
             } else {
                 MiniWebPreviewFallback(tab = tab, isDark = isDark)
+            }
+
+            if (isSelected || isDragged || isActive) {
+                Box(
+                    modifier = Modifier
+                        .matchParentSize()
+                        .graphicsLayer {
+                            alpha = if (isSelected || isDragged) 1f else chromeAlphaProvider()
+                        }
+                        .border(
+                            width = if (isSelected || isDragged) 2.5.dp else 1.8.dp,
+                            color = accentBlue,
+                            shape = OverviewCardShape,
+                        ),
+                )
             }
 
             if (isSelectionMode) {
@@ -1941,6 +2047,9 @@ private fun OverviewTabCard(
                         .align(Alignment.TopEnd)
                         .padding(2.dp)
                         .size(36.dp)
+                        .graphicsLayer {
+                            alpha = chromeAlphaProvider()
+                        }
                         .clickable(
                             interactionSource = remember { MutableInteractionSource() },
                             indication = null,
@@ -1968,7 +2077,11 @@ private fun OverviewTabCard(
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(5.dp),
-            modifier = Modifier.padding(horizontal = 4.dp),
+            modifier = Modifier
+                .padding(horizontal = 4.dp)
+                .graphicsLayer {
+                    alpha = chromeAlphaProvider()
+                },
         ) {
             Box(
                 modifier = Modifier
