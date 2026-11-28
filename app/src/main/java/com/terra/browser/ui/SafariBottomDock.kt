@@ -75,6 +75,7 @@ import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.BlendMode
@@ -91,6 +92,7 @@ import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.input.pointer.util.VelocityTracker
+import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -430,6 +432,7 @@ fun SafariTopAddressBar(
     onBarDragEnd: (velocityX: Float, velocityY: Float) -> Unit,
     onOpenNewTab: () -> Unit,
     modifier: Modifier = Modifier,
+    onBarTouchDown: () -> Unit = {},
 ) {
     val tab = state.activeTab
     val isDark = liquidKitAppearance().dark || state.activeGroup.isPrivate
@@ -563,6 +566,7 @@ fun SafariTopAddressBar(
                         onBarDragStart = onBarDragStart,
                         onBarDragDelta = { dx, _ -> onBarDragDelta(dx, 0f) },
                         onBarDragEnd = { vx, _ -> onBarDragEnd(vx, 0f) },
+                        onBarTouchDown = onBarTouchDown,
                         enableOverviewPullUpProvider = { false },
                         ink = colors.ink,
                         secondary = colors.secondary,
@@ -620,6 +624,7 @@ fun SafariBottomDock(
     onOpenOverview: () -> Unit,
     onOpenNewTab: () -> Unit,
     modifier: Modifier = Modifier,
+    onBarTouchDown: () -> Unit = {},
 ) {
     val tab = state.activeTab
     val isDark = liquidKitAppearance().dark || state.activeGroup.isPrivate
@@ -892,7 +897,7 @@ fun SafariBottomDock(
             .graphicsLayer {
                 val a = latestAlphaFactor().coerceIn(0f, 1f)
                 alpha = a
-                val hide = 1f - a
+                val hide = if (latestDragging()) 0f else (1f - a)
                 translationY = hide * 20.dp.toPx()
                 val s = lerp(1f, 0.95f, hide)
                 scaleX = s
@@ -1020,6 +1025,7 @@ fun SafariBottomDock(
                     onBarDragEnd = onBarDragEnd,
                     onOpenOverview = onOpenOverview,
                     onOpenNewTab = onOpenNewTab,
+                    onBarTouchDown = onBarTouchDown,
                 )
             } else {
                 when (state.tabBarMode) {
@@ -1279,6 +1285,7 @@ fun SafariBottomDock(
                                             onBarDragStart = onBarDragStart,
                                             onBarDragDelta = onBarDragDelta,
                                             onBarDragEnd = onBarDragEnd,
+                                            onBarTouchDown = onBarTouchDown,
                                             enableOverviewPullUpProvider = { collapseState.value < 0.5f },
                                             ink = colors.ink,
                                             secondary = colors.secondary,
@@ -1441,6 +1448,7 @@ fun SafariBottomDock(
                                                 onBarDragStart = onBarDragStart,
                                                 onBarDragDelta = onBarDragDelta,
                                                 onBarDragEnd = onBarDragEnd,
+                                                onBarTouchDown = onBarTouchDown,
                                                 enableOverviewPullUpProvider = { collapseState.value < 0.5f },
                                                 ink = colors.ink,
                                                 secondary = colors.secondary,
@@ -1655,6 +1663,7 @@ private fun PhoneLandscapeBar(
     onBarDragEnd: (velocityX: Float, velocityY: Float) -> Unit,
     onOpenOverview: () -> Unit,
     onOpenNewTab: () -> Unit,
+    onBarTouchDown: () -> Unit = {},
 ) {
     val density = LocalDensity.current
     val hideAllForPageMenuState = animateFloatAsState(
@@ -1824,6 +1833,7 @@ private fun PhoneLandscapeBar(
                         onBarDragStart = onBarDragStart,
                         onBarDragDelta = onBarDragDelta,
                         onBarDragEnd = onBarDragEnd,
+                        onBarTouchDown = onBarTouchDown,
                         enableOverviewPullUpProvider = { collapseState.value < 0.5f },
                         ink = ink,
                         secondary = secondary,
@@ -2125,6 +2135,7 @@ internal fun AddressPillSurface(
     swipeTxPxProvider: () -> Float = { swipeTxPx },
     innerTintAlphaProvider: (() -> Float)? = null,
     onBeforeOpenMenu: (io.liquidkit.LiquidKitMenuState) -> Unit = {},
+    onBarTouchDown: () -> Unit = {},
 ) {
     val isDark = liquidKitAppearance().dark
     val scope = rememberCoroutineScope()
@@ -2137,6 +2148,7 @@ internal fun AddressPillSurface(
     val latestOnBarDragDelta by rememberUpdatedState(onBarDragDelta)
     val latestOnBarDragEnd by rememberUpdatedState(onBarDragEnd)
     val latestOnBeforeOpenMenu by rememberUpdatedState(onBeforeOpenMenu)
+    val latestOnBarTouchDown by rememberUpdatedState(onBarTouchDown)
 
     val isCompactTitle by remember { derivedStateOf { collapseProvider() > 0.5f } }
     val sideControlsInteractive by remember {
@@ -2166,16 +2178,20 @@ internal fun AddressPillSurface(
         }
     }
 
+    var pillCoords by remember { mutableStateOf<LayoutCoordinates?>(null) }
+
     // Outer container is strictly STATIONARY so pointerInput deltas/velocity never fight translationX.
     // Keyed on Unit so active swipe/drag touches are never dropped across mid-gesture tab switches.
     Box(
         modifier = modifier
+            .onGloballyPositioned { pillCoords = it }
             .pointerInput(Unit) {
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false)
                     if (down.isConsumed || pageMenuState.expanded || addressLongPressMenuState.expanded) {
                         return@awaitEachGesture
                     }
+                    latestOnBarTouchDown()
                     val curCollapse = latestCollapseProvider().coerceIn(0f, 1f)
                     val curSideEdgePx = if (curCollapse >= 0.5f) {
                         0f
@@ -2187,12 +2203,17 @@ internal fun AddressPillSurface(
                     if (inCenter) {
                         isHoldingCenter = true
                     }
-                    val slop = viewConfiguration.touchSlop * 0.65f
+                    fun toRoot(local: Offset): Offset {
+                        val c = pillCoords
+                        return if (c != null && c.isAttached) c.localToRoot(local) else local
+                    }
+                    var prevRootPos = toRoot(down.position)
+                    val slop = viewConfiguration.touchSlop * 0.60f
                     val vt = VelocityTracker()
-                    vt.addPosition(down.uptimeMillis, down.position)
+                    vt.addPosition(down.uptimeMillis, prevRootPos)
                     var totalDx = 0f
                     var totalDy = 0f
-                    var mode = 0 // 0=undecided, 1=unified 2D bar drag, 3=ignored downward drag, 4=longPressMenu
+                    var mode = 0 // 0=undecided, 1=horizontalTabSwipe, 2=verticalPullUpToOverview, 3=ignoredDownward, 4=longPressMenu
                     var dragStarted = false
                     var endedCleanly = false
                     var gestureActive = true
@@ -2226,7 +2247,7 @@ internal fun AddressPillSurface(
                                 holdJob?.cancel()
                                 isHoldingCenter = false
                                 val vel = vt.calculateVelocity()
-                                if (mode == 1 || mode == 4) {
+                                if (mode == 1 || mode == 2 || mode == 4) {
                                     change.consume()
                                 }
                                 when (mode) {
@@ -2240,34 +2261,57 @@ internal fun AddressPillSurface(
                                     }
                                     1 -> {
                                         endedCleanly = true
+                                        latestOnBarDragEnd(vel.x, 0f)
+                                    }
+                                    2 -> {
+                                        endedCleanly = true
                                         latestOnBarDragEnd(vel.x, vel.y)
                                     }
                                 }
                                 break
                             }
-                            val d = change.positionChange()
-                            vt.addPosition(change.uptimeMillis, change.position)
-                            totalDx += d.x
-                            totalDy += d.y
+                            val curRootPos = toRoot(change.position)
+                            val delta = curRootPos - prevRootPos
+                            prevRootPos = curRootPos
+                            vt.addPosition(change.uptimeMillis, curRootPos)
+                            totalDx += delta.x
+                            totalDy += delta.y
 
                             if (mode == 0 && (abs(totalDx) > slop || abs(totalDy) > slop)) {
                                 holdJob?.cancel()
                                 isHoldingCenter = false
-                                mode = if (totalDy > 0f && abs(totalDy) > abs(totalDx) * 1.15f) {
-                                    3
-                                } else {
-                                    1
+                                mode = when {
+                                    totalDy > 0f && abs(totalDy) > abs(totalDx) * 1.15f -> 3
+                                    totalDy < 0f && abs(totalDy) > abs(totalDx) * 0.85f && latestEnablePullUpProvider() -> 2
+                                    else -> 1
                                 }
                             }
-                            if (mode == 1) {
-                                if (!dragStarted) {
-                                    dragStarted = true
-                                    latestOnBarDragStart()
+                            when (mode) {
+                                1 -> {
+                                    val firstFrame = !dragStarted
+                                    if (firstFrame) {
+                                        dragStarted = true
+                                        latestOnBarDragStart()
+                                        change.consume()
+                                        latestOnBarDragDelta(totalDx * 0.5f, 0f)
+                                    } else {
+                                        change.consume()
+                                        latestOnBarDragDelta(delta.x, 0f)
+                                    }
                                 }
-                                change.consume()
-                                latestOnBarDragDelta(d.x, if (latestEnablePullUpProvider()) d.y else 0f)
-                            } else if (mode == 4) {
-                                change.consume()
+                                2 -> {
+                                    val firstFrame = !dragStarted
+                                    if (firstFrame) {
+                                        dragStarted = true
+                                        latestOnBarDragStart()
+                                        change.consume()
+                                        latestOnBarDragDelta(totalDx * 0.4f, totalDy * 0.5f)
+                                    } else {
+                                        change.consume()
+                                        latestOnBarDragDelta(delta.x, delta.y)
+                                    }
+                                }
+                                4 -> change.consume()
                             }
                         }
                     } finally {

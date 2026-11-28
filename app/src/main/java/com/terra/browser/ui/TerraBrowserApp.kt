@@ -1,5 +1,6 @@
 package com.terra.browser.ui
 
+import android.os.Build
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
@@ -80,6 +81,7 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.BlurEffect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.CompositingStrategy
@@ -164,30 +166,56 @@ private fun computeDragLiftGeometry(
     rootH: Float,
     cardAspectRatio: Float,
 ): LiftCardGeometry {
-    val rawLift = (-curY / (rootH * 0.36f).coerceAtLeast(1f)).coerceAtLeast(0f)
+    if (curY >= -1f) {
+        val horizP = (abs(curX) / rootW.coerceAtLeast(1f)).coerceIn(0f, 1f)
+        val scale = lerp(1f, 0.955f, (horizP * 2.5f).coerceIn(0f, 1f))
+        val curW = (rootW * scale).coerceAtLeast(1f)
+        val curH = (rootH * scale).coerceAtLeast(1f)
+        val left = (rootW - curW) * 0.5f + curX
+        val top = (rootH - curH) * 0.5f
+        val cornerDp = lerp(0f, 34f, (horizP * 5f).coerceIn(0f, 1f))
+        return LiftCardGeometry(
+            rect = Rect(left, top, left + curW, top + curH),
+            cornerDp = cornerDp,
+        )
+    }
+    val rawLift = (-curY / (rootH * 0.50f).coerceAtLeast(1f)).coerceAtLeast(0f)
     val clampedLift = rawLift.coerceIn(0f, 1f)
-    val horizP = (abs(curX) / rootW.coerceAtLeast(1f)).coerceIn(0f, 1f)
-    val widthScale = lerp(1f, 0.48f, clampedLift) * lerp(1f, 0.968f, horizP * (1f - clampedLift))
+    val widthScale = lerp(1f, 0.50f, clampedLift)
     val curW = (rootW * widthScale).coerceAtLeast(1f)
     val fullScaledH = (rootH * widthScale).coerceAtLeast(1f)
     val cardRatioH = (curW / cardAspectRatio.coerceAtLeast(0.4f)).coerceAtMost(fullScaledH)
-    val curH = lerp(fullScaledH, cardRatioH, clampedLift * 0.72f)
-    val extraUp = if (rawLift > 1f) rubberBand(rawLift - 1f, 0.14f) * rootH * 0.25f else 0f
-    val centerX = rootW * 0.5f + curX * lerp(1f, 0.72f, clampedLift)
-    val centerY = rootH * 0.5f + curY * 0.62f - extraUp
-    val cornerDp = maxOf(
-        lerp(0f, 26f, clampedLift),
-        lerp(0f, 18f, (horizP * 2.2f).coerceIn(0f, 1f)),
-    )
+    val cropT = 1f - (1f - clampedLift) * (1f - clampedLift)
+    val curH = lerp(fullScaledH, cardRatioH, cropT)
+    val extraUp = if (rawLift > 1f) rubberBand(rawLift - 1f, 0.14f) * rootH * 0.22f else 0f
+    val bottomY = (rootH + curY * 0.85f - extraUp).coerceAtLeast(curH + rootH * 0.12f)
+    val topY = bottomY - curH
+    val centerX = rootW * 0.5f + curX * lerp(1f, 0.78f, clampedLift)
+    val cornerDp = if (clampedLift < 0.06f) {
+        lerp(0f, 32f, clampedLift / 0.06f)
+    } else {
+        lerp(32f, 22f, ((clampedLift - 0.06f) / 0.94f).coerceIn(0f, 1f))
+    }
     return LiftCardGeometry(
         rect = Rect(
             left = centerX - curW * 0.5f,
-            top = centerY - curH * 0.5f,
+            top = topY,
             right = centerX + curW * 0.5f,
-            bottom = centerY + curH * 0.5f,
+            bottom = bottomY,
         ),
         cornerDp = cornerDp,
     )
+}
+
+private fun lerpHeroRect(full: Rect, target: Rect, p: Float): Rect {
+    val t = p.coerceIn(0f, 1f)
+    val hT = 1f - (1f - t) * (1f - t)
+    val left = lerp(full.left, target.left, t)
+    val right = lerp(full.right, target.right, t)
+    val top = lerp(full.top, target.top, t)
+    val w = (right - left).coerceAtLeast(1f)
+    val h = lerp(full.height, target.height, hT).coerceAtLeast(target.height)
+    return Rect(left, top, left + w, top + h)
 }
 
 private fun rubberBand(over: Float, limit: Float): Float {
@@ -500,17 +528,19 @@ fun TerraBrowserApp(
                     val rootWidthPx = with(density) { maxWidth.toPx() }.coerceAtLeast(1f)
                     val rootHeightPx = with(density) { maxHeight.toPx() }.coerceAtLeast(1f)
                     val statusBarTopPx = with(density) { statusBarTopDp.toPx() }
+                    val cutoutTopDp = WindowInsets.displayCutout.asPaddingValues().calculateTopPadding()
+                    val topSafePx = with(density) { maxOf(statusBarTopDp, cutoutTopDp).toPx() }
                     val cutoutPadding = WindowInsets.displayCutout.only(WindowInsetsSides.Horizontal).asPaddingValues()
                     val cutoutStartPx = with(density) { cutoutPadding.calculateLeftPadding(LayoutDirection.Ltr).toPx() }
                     val cutoutEndPx = with(density) { cutoutPadding.calculateRightPadding(LayoutDirection.Ltr).toPx() }
                     lastRootWidthPx = rootWidthPx
                     lastRootHeightPx = rootHeightPx
-                    lastStatusBarTopPx = statusBarTopPx
+                    lastStatusBarTopPx = topSafePx
                     lastCutoutStartPx = cutoutStartPx
                     lastCutoutEndPx = cutoutEndPx
                     lastLayoutProfile = layoutProfile
 
-            val swipeGapPx = with(density) { 14.dp.toPx() }
+            val swipeGapPx = with(density) { 16.dp.toPx() }
             val swipeStepPx = rootWidthPx + swipeGapPx
             val activeGesture by remember { derivedStateOf { isBarDragging || isSettlingBarDrag } }
             val canSwipeToNewTab = state.peekAdjacentTab(+1) == null && !activeTab.isStartPage
@@ -522,7 +552,7 @@ fun TerraBrowserApp(
             }
             val effectiveOverviewPProvider: () -> Float = {
                 val dragY = if (isBarDragging) liveDragY else settleDragY.value
-                val liftP = if (isBarDragging || isSettlingBarDrag) (-dragY / (rootHeightPx * 0.36f)).coerceIn(0f, 1f) else 0f
+                val liftP = if (isBarDragging || isSettlingBarDrag) (-dragY / (rootHeightPx * 0.50f)).coerceIn(0f, 1f) else 0f
                 val dragPreview = if (liftP > 0.03f) ((liftP - 0.03f) / 0.62f).coerceIn(0f, 0.82f) else 0f
                 maxOf(overviewProgress.value.coerceIn(0f, 1f), dragPreview)
             }
@@ -589,13 +619,16 @@ fun TerraBrowserApp(
             } else {
                 statusBarTopPx.roundToInt()
             }
-            val pixelCopyBottomClearanceDp = BrowserSafeAreaCalculator.bottomSafeInsetDp(
-                layoutProfile = layoutProfile,
-                tabBarMode = state.tabBarMode,
-                isToolbarHidden = state.isToolbarHidden,
-                isToolbarMinimized = state.isToolbarMinimized,
-                navigationBarBottomDp = navBarBottomDp,
-            )
+            val pixelCopyBottomClearanceDp = when {
+                layoutProfile == BrowserLayoutProfile.TABLET_LANDSCAPE -> navBarBottomDp
+                state.isToolbarHidden -> navBarBottomDp + 8f
+                layoutProfile == BrowserLayoutProfile.PHONE_LANDSCAPE -> navBarBottomDp + if (state.isToolbarMinimized) 44f else 62f
+                else -> when (state.tabBarMode) {
+                    TabBarMode.BOTTOM -> navBarBottomDp + if (state.isToolbarMinimized) 50f else 116f
+                    TabBarMode.COMPACT -> navBarBottomDp + if (state.isToolbarMinimized) 48f else 74f
+                    TabBarMode.TOP -> navBarBottomDp + 8f
+                }
+            }
             val pixelCopyCropBottomPx = (rootHeightPx - with(density) { pixelCopyBottomClearanceDp.dp.toPx() })
                 .roundToInt()
                 .coerceAtLeast(pixelCopyCropTopPx + 64)
@@ -646,7 +679,7 @@ fun TerraBrowserApp(
                             layoutProfile = layoutProfile,
                             rootWidthPx = rootWidthPx,
                             rootHeightPx = rootHeightPx,
-                            statusBarTopPx = statusBarTopPx,
+                            statusBarTopPx = topSafePx,
                             densityPx = density.density,
                             cutoutStartPx = cutoutStartPx,
                             cutoutEndPx = cutoutEndPx,
@@ -1030,15 +1063,44 @@ fun TerraBrowserApp(
                     }
 
                     if (activeGesture && dragGeo != null) {
-                        val liftP = (-curY / (rootHeightPx * 0.36f)).coerceIn(0f, 1f)
+                        val liftP = (-curY / (rootHeightPx * 0.50f)).coerceIn(0f, 1f)
                         val dragPreview = if (liftP > 0.03f) ((liftP - 0.03f) / 0.62f).coerceIn(0f, 0.82f) else 0f
-                        Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .zIndex(1.5f)
-                                .graphicsLayer { alpha = (1f - dragPreview).coerceIn(0f, 1f) }
-                                .background(if (appDark) Color(0xFF0D0F14) else Color(0xFFE7EBF2)),
-                        )
+                        val ambientAlpha = (1f - dragPreview).coerceIn(0f, 1f)
+                        if (ambientAlpha > 0.01f) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .zIndex(1.4f)
+                                    .graphicsLayer { alpha = ambientAlpha }
+                                    .background(if (appDark) Color(0xFF101218) else Color(0xFFDCE3F0)),
+                            ) {
+                                val ambientThumb = state.thumbnails[activeTab.id]
+                                if (ambientThumb != null) {
+                                    Image(
+                                        bitmap = ambientThumb,
+                                        contentDescription = null,
+                                        contentScale = ContentScale.Crop,
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .graphicsLayer {
+                                                alpha = if (appDark) 0.42f else 0.36f
+                                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                                                    val r = 46.dp.toPx()
+                                                    renderEffect = BlurEffect(r, r, TileMode.Clamp)
+                                                }
+                                            },
+                                    )
+                                }
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .background(
+                                            if (appDark) Color(0xFF0A0C12).copy(alpha = 0.48f)
+                                            else Color(0xFFE7ECF6).copy(alpha = 0.45f),
+                                        ),
+                                )
+                            }
+                        }
 
                         val adjStep = dragGeo.rect.width + swipeGapPx
                         val adjScale = (dragGeo.rect.width / rootWidthPx).coerceIn(0.05f, 1.2f)
@@ -1102,7 +1164,7 @@ fun TerraBrowserApp(
                             layoutProfile = layoutProfile,
                             rootWidthPx = rootWidthPx,
                             rootHeightPx = rootHeightPx,
-                            statusBarTopPx = statusBarTopPx,
+                            statusBarTopPx = topSafePx,
                             densityPx = density.density,
                             cutoutStartPx = cutoutStartPx,
                             cutoutEndPx = cutoutEndPx,
@@ -1117,7 +1179,7 @@ fun TerraBrowserApp(
                         dragGeo != null -> {
                             heroRect = dragGeo.rect
                             heroCornerDp = dragGeo.cornerDp
-                            flightProgress = (-curY / (rootHeightPx * 0.36f)).coerceIn(0f, 1f)
+                            flightProgress = (-curY / (rootHeightPx * 0.50f)).coerceIn(0f, 1f)
                         }
                         curReleaseStart != null -> {
                             val t = ((pOverview - releaseStartP) / (1f - releaseStartP).coerceAtLeast(0.01f)).coerceIn(0f, 1f)
@@ -1127,13 +1189,13 @@ fun TerraBrowserApp(
                         }
                         curClosingOverride != null -> {
                             val t = (pOverview / closingOverrideP.coerceAtLeast(0.01f)).coerceIn(0f, 1f)
-                            heroRect = androidx.compose.ui.geometry.lerp(fullRect, curClosingOverride, t)
-                            heroCornerDp = lerp(0f, closingOverrideCornerDp, t)
+                            heroRect = lerpHeroRect(fullRect, curClosingOverride, t)
+                            heroCornerDp = if (t < 0.04f) lerp(0f, 34f, t / 0.04f) else lerp(34f, closingOverrideCornerDp, (t - 0.04f) / 0.96f)
                             flightProgress = t
                         }
                         else -> {
-                            heroRect = androidx.compose.ui.geometry.lerp(fullRect, targetRect, pOverview)
-                            heroCornerDp = lerp(0f, 18f, pOverview)
+                            heroRect = lerpHeroRect(fullRect, targetRect, pOverview)
+                            heroCornerDp = if (pOverview < 0.04f) lerp(0f, 34f, pOverview / 0.04f) else lerp(34f, 18f, (pOverview - 0.04f) / 0.96f)
                             flightProgress = pOverview
                         }
                     }
@@ -1165,14 +1227,31 @@ fun TerraBrowserApp(
                             .clip(cardShape),
                     ) {
                         if (activeTab.isStartPage) {
+                            val spTopBg = when {
+                                state.activeGroup.isPrivate -> Color(0xFF1A1B1F)
+                                appDark -> Color(0xFF141820)
+                                else -> Color(0xFFF3F5FA)
+                            }
                             Box(
                                 modifier = Modifier
-                                    .requiredSize(rootWidthDp, rootHeightDp)
+                                    .fillMaxSize()
+                                    .background(spTopBg)
+                                    .layout { measurable, constraints ->
+                                        val rw = rootWidthPx.roundToInt().coerceAtLeast(1)
+                                        val rh = rootHeightPx.roundToInt().coerceAtLeast(1)
+                                        val placeable = measurable.measure(
+                                            androidx.compose.ui.unit.Constraints.fixed(rw, rh),
+                                        )
+                                        layout(constraints.maxWidth, constraints.maxHeight) {
+                                            placeable.placeRelative(0, 0)
+                                        }
+                                    }
                                     .graphicsLayer {
                                         val s = (cardW / rootWidthPx).coerceIn(0.05f, 1.2f)
                                         transformOrigin = TransformOrigin(0f, 0f)
                                         scaleX = s
                                         scaleY = s
+                                        translationY = lerp(statusBarTopPx, 0f, flightProgress) * s
                                     },
                             ) {
                                 StartPage(
@@ -1184,6 +1263,8 @@ fun TerraBrowserApp(
                                     onOpenSettings = {},
                                     topExtraPadding = topBarExtra,
                                     layoutProfile = layoutProfile,
+                                    isPreview = true,
+                                    isPrivateOverride = state.activeGroup.isPrivate,
                                 )
                             }
                         } else {
@@ -1225,6 +1306,34 @@ fun TerraBrowserApp(
                                     layoutProfile = layoutProfile,
                                     snapMeta = snapMeta,
                                 )
+                            }
+                        }
+
+                        if (!activeGesture || flightProgress > 0.65f) {
+                            val badgeAlpha = ((flightProgress - 0.65f) / 0.35f).coerceIn(0f, 1f)
+                            if (badgeAlpha > 0.01f) {
+                                Box(
+                                    modifier = Modifier
+                                        .align(Alignment.TopEnd)
+                                        .padding(2.dp)
+                                        .size(36.dp)
+                                        .graphicsLayer { alpha = badgeAlpha },
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(26.dp)
+                                            .clip(CircleShape)
+                                            .background(Color.Black.copy(alpha = 0.48f)),
+                                        contentAlignment = Alignment.Center,
+                                    ) {
+                                        TerraSymbolIcon(
+                                            symbol = LiquidKitSymbol.Close,
+                                            tint = Color.White,
+                                            modifier = Modifier.size(12.dp),
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
@@ -1282,14 +1391,14 @@ fun TerraBrowserApp(
             val handleBarDragEnd: (Float, Float, Boolean) -> Unit = { vx, vy, allowOverview ->
                 val endX = liveDragX
                 val endY = liveDragY
-                val liftP = if (allowOverview) (-endY / (rootHeightPx * 0.36f)).coerceIn(0f, 1f) else 0f
+                val liftP = if (allowOverview) (-endY / (rootHeightPx * 0.50f)).coerceIn(0f, 1f) else 0f
                 val dragOverviewPreview = if (liftP > 0.03f) ((liftP - 0.03f) / 0.62f).coerceIn(0f, 0.82f) else 0f
                 val clampedVx = vx.coerceIn(-maxSwipeVel, maxSwipeVel)
 
                 barGestureJob?.cancel()
                 barGestureJob = scope.launch {
                     when {
-                        allowOverview && (liftP >= 0.16f || (vy <= -380f && abs(vy) > abs(vx) * 0.75f)) -> {
+                        allowOverview && (liftP >= 0.18f || (vy <= -420f && abs(vy) > abs(vx) * 0.85f)) -> {
                             val releaseGeo = computeDragLiftGeometry(endX, endY, rootWidthPx, rootHeightPx, overviewCardAspectRatio)
                             closingOverrideRect = null
                             morphTargetRectOverride = cardBoundsMap[activeTab.id] ?: computeExpectedOverviewCardRect(
@@ -1298,7 +1407,7 @@ fun TerraBrowserApp(
                                 layoutProfile = layoutProfile,
                                 rootWidthPx = rootWidthPx,
                                 rootHeightPx = rootHeightPx,
-                                statusBarTopPx = statusBarTopPx,
+                                statusBarTopPx = topSafePx,
                                 densityPx = density.density,
                                 cutoutStartPx = cutoutStartPx,
                                 cutoutEndPx = cutoutEndPx,
@@ -1413,6 +1522,11 @@ fun TerraBrowserApp(
                 onBarDragStart = handleBarDragStart,
                 onBarDragDelta = handleBarDragDelta,
                 onBarDragEnd = handleBarDragEnd,
+                onBarTouchDown = {
+                    if (!activeTab.isStartPage) {
+                        pool.capturePixelCopy(activeTab.id, force = true)
+                    }
+                },
                 onOpenOverview = {
                     val launchOverview = {
                         releaseStartRect = null
@@ -1422,7 +1536,7 @@ fun TerraBrowserApp(
                             layoutProfile = layoutProfile,
                             rootWidthPx = rootWidthPx,
                             rootHeightPx = rootHeightPx,
-                            statusBarTopPx = statusBarTopPx,
+                            statusBarTopPx = topSafePx,
                             densityPx = density.density,
                             cutoutStartPx = cutoutStartPx,
                             cutoutEndPx = cutoutEndPx,
@@ -1771,6 +1885,7 @@ private fun BoxScope.ChromeLayerHost(
     onBarDragStart: () -> Unit,
     onBarDragDelta: (Float, Float) -> Unit,
     onBarDragEnd: (Float, Float, Boolean) -> Unit,
+    onBarTouchDown: () -> Unit = {},
     onOpenOverview: () -> Unit,
     onOpenNewTab: () -> Unit,
 ) {
@@ -1848,6 +1963,7 @@ private fun BoxScope.ChromeLayerHost(
                 onBarDragStart = onBarDragStart,
                 onBarDragDelta = { dx, _ -> onBarDragDelta(dx, 0f) },
                 onBarDragEnd = { vx, _ -> onBarDragEnd(vx, 0f, false) },
+                onBarTouchDown = onBarTouchDown,
                 onOpenNewTab = onOpenNewTab,
                 modifier = Modifier.align(Alignment.TopCenter).zIndex(5f),
             )
@@ -1868,6 +1984,7 @@ private fun BoxScope.ChromeLayerHost(
             onOpenOverview = onOpenOverview,
             onOpenNewTab = onOpenNewTab,
             modifier = Modifier.align(Alignment.BottomCenter).zIndex(5f),
+            onBarTouchDown = onBarTouchDown,
         )
     }
 }

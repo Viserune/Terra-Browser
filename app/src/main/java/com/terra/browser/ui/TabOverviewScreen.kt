@@ -39,19 +39,19 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.displayCutoutPadding
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBars
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
-import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
@@ -103,6 +103,7 @@ import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.TileMode
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp as lerpColor
 import androidx.compose.ui.input.pointer.PointerEventPass
@@ -231,8 +232,8 @@ internal fun computeExpectedOverviewCardRect(
     val isTablet = layoutProfile == BrowserLayoutProfile.TABLET_LANDSCAPE
     val gridTopPad = statusBarTopPx + when {
         isTablet -> 72f * densityPx
-        layoutProfile == BrowserLayoutProfile.PHONE_LANDSCAPE -> 54f * densityPx
-        else -> 64f * densityPx
+        layoutProfile == BrowserLayoutProfile.PHONE_LANDSCAPE -> 58f * densityPx
+        else -> 70f * densityPx
     }
     var yOffset = gridTopPad
     if (!group.isDefault) {
@@ -581,6 +582,8 @@ fun TabOverviewScreen(
 
     val overviewBackdrop = rememberLiquidKitBackdrop()
     val statusBarTopDp = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
+    val cutoutTopDp = WindowInsets.displayCutout.asPaddingValues().calculateTopPadding()
+    val topSafeDp = maxOf(statusBarTopDp, cutoutTopDp)
     val currentGroup by remember(state.tabGroups) {
         derivedStateOf { state.tabGroups.getOrNull(pagerState.currentPage) ?: state.activeGroup }
     }
@@ -652,12 +655,38 @@ fun TabOverviewScreen(
             }
             .drawBehind {
                 val darkT = overviewDarkFractionProvider().coerceIn(0f, 1f)
-                val topColor = lerpColor(Color(0xFFE7ECF6), Color(0xFF1B191D), darkT)
-                val midColor = lerpColor(Color(0xFFDFE6F2), Color(0xFF141519), darkT)
-                val botColor = lerpColor(Color(0xFFD9E1EE), Color(0xFF101318), darkT)
+                val smoothDarkT = darkT * darkT * (3f - 2f * darkT)
+                val topColor = lerpColor(Color(0xFFE7ECF6), Color(0xFF1B191D), smoothDarkT)
+                val midColor = lerpColor(Color(0xFFDFE6F2), Color(0xFF141519), smoothDarkT)
+                val botColor = lerpColor(Color(0xFFD9E1EE), Color(0xFF101318), smoothDarkT)
                 drawRect(Brush.verticalGradient(listOf(topColor, midColor, botColor)))
             },
     ) {
+        val navBottomDp = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer {
+                    val p = latestOverviewProgress().coerceIn(0f, 1f)
+                    val bgP = ((p - 0.02f) / 0.98f).coerceIn(0f, 1f)
+                    val s = lerp(0.93f, 1.0f, bgP)
+                    scaleX = s
+                    scaleY = s
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                        val blurT = 1f - ((p - 0.10f) / 0.90f).coerceIn(0f, 1f)
+                        val blurPx = if (p < 0.992f && blurT > 0.01f) {
+                            (blurT * blurT) * with(density) { 32.dp.toPx() }
+                        } else {
+                            0f
+                        }
+                        renderEffect = if (blurPx > 0.5f) {
+                            BlurEffect(blurPx, blurPx, TileMode.Clamp)
+                        } else {
+                            null
+                        }
+                    }
+                },
+        ) {
         BoxWithConstraints(
             modifier = Modifier
                 .fillMaxSize()
@@ -672,10 +701,10 @@ fun TabOverviewScreen(
             val isTablet = layoutProfile == BrowserLayoutProfile.TABLET_LANDSCAPE
             val gridCols = overviewGridCols(layoutProfile, maxWidth.value, maxHeight.value)
             val cardAspectRatio = overviewCardAspectRatio(layoutProfile, maxWidth.value, maxHeight.value)
-            val gridTopPad = statusBarTopDp + when {
+            val gridTopPad = topSafeDp + when {
                 isTablet -> 72.dp
-                layoutProfile == BrowserLayoutProfile.PHONE_LANDSCAPE -> 54.dp
-                else -> 64.dp
+                layoutProfile == BrowserLayoutProfile.PHONE_LANDSCAPE -> 58.dp
+                else -> 70.dp
             }
             val gridBottomPad = when {
                 isTablet && !state.isOverviewSearchActive && !isSelectionMode -> 36.dp
@@ -692,28 +721,7 @@ fun TabOverviewScreen(
                     snapAnimationSpec = pagerSnapSpring,
                     snapPositionalThreshold = 0.28f,
                 ),
-                modifier = Modifier
-                    .fillMaxSize()
-                    .graphicsLayer {
-                        val p = latestOverviewProgress().coerceIn(0f, 1f)
-                        val bgP = ((p - 0.02f) / 0.98f).coerceIn(0f, 1f)
-                        val s = lerp(0.935f, 1.0f, bgP)
-                        scaleX = s
-                        scaleY = s
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                            val blurT = 1f - ((p - 0.10f) / 0.90f).coerceIn(0f, 1f)
-                            val blurPx = if (p < 0.992f && blurT > 0.01f) {
-                                (blurT * blurT) * with(density) { 26.dp.toPx() }
-                            } else {
-                                0f
-                            }
-                            renderEffect = if (blurPx > 0.5f) {
-                                BlurEffect(blurPx, blurPx, TileMode.Clamp)
-                            } else {
-                                null
-                            }
-                        }
-                    },
+                modifier = Modifier.fillMaxSize(),
             ) { pageIndex ->
                 val group = state.tabGroups.getOrNull(pageIndex) ?: return@HorizontalPager
                 val allGroupTabs = state.tabsInGroup(group.id, includeSearchFilter = true)
@@ -1144,6 +1152,49 @@ fun TabOverviewScreen(
                                     ((latestOverviewProgress() - 0.65f) / 0.35f).coerceIn(0f, 1f)
                                 },
                                 hidePreviewProvider = { tab.id == latestHiddenCardTabId() },
+                                startPagePreview = if (tab.isStartPage) {
+                                    {
+                                        BoxWithConstraints(Modifier.fillMaxSize()) {
+                                            val targetFullW = if (layoutProfile == BrowserLayoutProfile.PHONE_PORTRAIT) 390.dp else 720.dp
+                                            val fullWPx = with(density) { targetFullW.toPx() }.coerceAtLeast(1f)
+                                            val cardWPx = with(density) { maxWidth.toPx() }.coerceAtLeast(1f)
+                                            val cardHPx = with(density) { maxHeight.toPx() }.coerceAtLeast(1f)
+                                            val s = (cardWPx / fullWPx).coerceIn(0.1f, 1.5f)
+                                            val fullHPx = (cardHPx / s).coerceAtLeast(1f)
+                                            Box(
+                                                modifier = Modifier
+                                                    .fillMaxSize()
+                                                    .layout { measurable, constraints ->
+                                                        val rw = fullWPx.roundToInt().coerceAtLeast(1)
+                                                        val rh = fullHPx.roundToInt().coerceAtLeast(1)
+                                                        val p = measurable.measure(androidx.compose.ui.unit.Constraints.fixed(rw, rh))
+                                                        layout(constraints.maxWidth, constraints.maxHeight) {
+                                                            p.placeRelative(0, 0)
+                                                        }
+                                                    }
+                                                    .graphicsLayer {
+                                                        transformOrigin = TransformOrigin(0f, 0f)
+                                                        scaleX = s
+                                                        scaleY = s
+                                                    },
+                                            ) {
+                                                StartPage(
+                                                    state = state,
+                                                    onOpenUrl = {},
+                                                    onOpenUrlInNewTab = {},
+                                                    onOpenReadingList = {},
+                                                    onOpenPrivacyReport = {},
+                                                    onOpenSettings = {},
+                                                    layoutProfile = layoutProfile,
+                                                    isPreview = true,
+                                                    isPrivateOverride = group.isPrivate,
+                                                )
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    null
+                                },
                                 onPreviewPositioned = { rect ->
                                     previewBoundsRef[0] = rect
                                     if (latestOverviewProgress() >= 0.98f && !pagerState.isScrollInProgress && !isDraggingThis && closingTabIds[tab.id] != true) {
@@ -1169,7 +1220,7 @@ fun TabOverviewScreen(
         // Top Progressive Blur Veil keeping status bar & floating buttons legible with zero horizontal cutoff seam
         OverviewProgressiveBlurEdge(
             backdrop = overviewBackdrop,
-            height = statusBarTopDp + 78.dp,
+            height = topSafeDp + 76.dp,
             darkFractionProvider = overviewDarkFractionProvider,
             isTop = true,
             blurEnabled = overviewBackdropEnabled,
@@ -1209,8 +1260,10 @@ fun TabOverviewScreen(
                             alpha = chromeP
                             translationY = lerp(-12.dp.toPx(), 0f, chromeP)
                         }
-                        .statusBarsPadding()
-                        .displayCutoutPadding()
+                        .windowInsetsPadding(
+                            WindowInsets.statusBars.union(WindowInsets.displayCutout)
+                                .only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal),
+                        )
                         .padding(horizontal = 16.dp, vertical = if (layoutProfile == BrowserLayoutProfile.PHONE_LANDSCAPE) 6.dp else 10.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically,
@@ -1301,7 +1354,6 @@ fun TabOverviewScreen(
         }
 
         // Bottom Progressive Blur Veil so scrolled card × buttons & titles fade cleanly behind bottom bar
-        val navBottomDp = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
         if (!isTabletOverview || state.isOverviewSearchActive || isSelectionMode) {
             OverviewProgressiveBlurEdge(
                 backdrop = overviewBackdrop,
@@ -1328,8 +1380,9 @@ fun TabOverviewScreen(
                     }
                     .widthIn(max = barMaxWidth)
                     .then(if (state.isOverviewSearchActive) Modifier.imePadding() else Modifier)
-                    .navigationBarsPadding()
-                    .displayCutoutPadding()
+                    .windowInsetsPadding(
+                        WindowInsets.navigationBars.union(WindowInsets.displayCutout.only(WindowInsetsSides.Horizontal)),
+                    )
                     .padding(horizontal = 16.dp, vertical = barVertPad),
             ) {
                 if (state.isOverviewSearchActive) {
@@ -1408,6 +1461,7 @@ fun TabOverviewScreen(
             }
             }
         }
+        } // end full-layer depth-of-field blur Box
 
         // Real LiquidKit Card Context Menu (authentic refractive Liquid Glass with Move Submenu)
         LiquidKitContextMenuHost(
@@ -1464,7 +1518,7 @@ fun TabOverviewScreen(
                         }
                         val previewW = if (isLandscape) minOf(cardW, 240.dp) else cardW
                         val cardH = previewW / ctxAspect + 26.dp
-                        val safeTop = statusBarTopDp + 10.dp
+                        val safeTop = topSafeDp + 10.dp
                         val safeBottom = (maxHeight - navBottomDp - 10.dp).coerceAtLeast(safeTop + 120.dp)
                         val availW = (maxWidth - 24.dp).coerceAtLeast(120.dp)
                         val menuW = minOf(menuMetrics.width, availW)
@@ -1618,8 +1672,10 @@ private fun TabletOverviewTopBar(
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .statusBarsPadding()
-            .displayCutoutPadding()
+            .windowInsetsPadding(
+                WindowInsets.statusBars.union(WindowInsets.displayCutout)
+                    .only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal),
+            )
             .padding(horizontal = 16.dp, vertical = 10.dp),
     ) {
         Row(
@@ -1960,6 +2016,7 @@ private fun OverviewTabCard(
     isSelected: Boolean = false,
     chromeAlphaProvider: () -> Float = { 1f },
     hidePreviewProvider: () -> Boolean = { false },
+    startPagePreview: (@Composable () -> Unit)? = null,
     onPreviewPositioned: ((Rect) -> Unit)? = null,
     onClose: () -> Unit,
 ) {
@@ -2001,7 +2058,11 @@ private fun OverviewTabCard(
                     modifier = Modifier.fillMaxSize(),
                 )
             } else if (tab.isStartPage) {
-                MiniStartPagePreview(isPrivate = isPrivateGroup, isDark = isDark, favorites = favorites)
+                if (startPagePreview != null) {
+                    startPagePreview()
+                } else {
+                    MiniStartPagePreview(isPrivate = isPrivateGroup, isDark = isDark, favorites = favorites)
+                }
             } else {
                 MiniWebPreviewFallback(tab = tab, isDark = isDark)
             }
@@ -2280,12 +2341,13 @@ private fun DynamicBottomGroupBar(
     val isSwitching = isExpandedBar || isTabInteracting
 
     val count = groups.size.coerceAtLeast(1)
-    val pagePositionState = remember(pagerState, count) {
-        derivedStateOf {
+    val selectedPositionProvider = remember(pagerState, count) {
+        {
             (pagerState.currentPage + pagerState.currentPageOffsetFraction)
                 .coerceIn(0f, (count - 1).toFloat())
         }
     }
+    val useScrollable = count >= 3
 
     val activeGroup by remember(groups) {
         derivedStateOf { groups.getOrNull(pagerState.currentPage) ?: state.activeGroup }
@@ -2473,8 +2535,8 @@ private fun DynamicBottomGroupBar(
                     backdrop = backdrop,
                     height = 48.dp,
                     tint = ink,
-                    selectedPosition = { pagePositionState.value },
-                    scrollable = count >= 2,
+                    selectedPosition = selectedPositionProvider,
+                    scrollable = useScrollable,
                     onScrubPosition = { pos ->
                         val pageSpanPx = (latestPagerState.layoutInfo.pageSize + latestPagerState.layoutInfo.pageSpacing)
                             .toFloat()
@@ -2511,11 +2573,19 @@ private fun DynamicBottomGroupBar(
                         .liquidKitMenuSource(groupPillMenuState, cornerRadius = 24.dp),
                 ) {
                     groups.forEach { grp ->
-                        Box(
-                            modifier = Modifier
+                        val itemModifier = if (useScrollable) {
+                            Modifier
                                 .defaultMinSize(minWidth = 64.dp)
                                 .widthIn(max = 148.dp)
-                                .padding(horizontal = 12.dp),
+                                .padding(horizontal = 12.dp)
+                        } else {
+                            Modifier
+                                .weight(1f)
+                                .fillMaxHeight()
+                                .padding(horizontal = 8.dp)
+                        }
+                        Box(
+                            modifier = itemModifier,
                             contentAlignment = Alignment.Center,
                         ) {
                             BasicText(

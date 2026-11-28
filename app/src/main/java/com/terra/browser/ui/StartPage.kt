@@ -97,10 +97,12 @@ fun StartPage(
     layoutProfile: BrowserLayoutProfile = BrowserLayoutProfile.PHONE_PORTRAIT,
     modifier: Modifier = Modifier,
     onScrollFractionChange: ((Float) -> Unit)? = null,
+    isPreview: Boolean = false,
+    isPrivateOverride: Boolean? = null,
 ) {
     val isDark = liquidKitAppearance().dark
     val colors = liquidKitColors(isDark)
-    val isPrivate = state.activeGroup.isPrivate
+    val isPrivate = isPrivateOverride ?: state.activeGroup.isPrivate
     val clipboard = LocalClipboardManager.current
     val density = LocalDensity.current
     val listState = rememberLazyListState()
@@ -236,86 +238,28 @@ fun StartPage(
 
     val startBackdrop = rememberLiquidKitBackdrop()
 
-    LiquidKitContextMenuHost(
-        state = contextMenuState,
-        items = contextMenuItems,
-        colors = colors,
-        modifier = modifier.fillMaxSize(),
-        preview = {
-            when (val target = contextTarget) {
-                is StartPageContextTarget.Favorite -> {
-                    val item = target.item
-                    Row(
-                        modifier = Modifier
-                            .padding(14.dp)
-                            .width(240.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(48.dp)
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(Color(item.colorArgb)),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            BasicText(
-                                text = item.shortGlyph,
-                                style = TextStyle(color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold),
-                            )
-                        }
-                        Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                            BasicText(
-                                text = item.title,
-                                style = TextStyle(color = colors.ink, fontSize = 15.sp, fontWeight = FontWeight.SemiBold),
-                            )
-                            BasicText(
-                                text = BrowserUrlUtils.displayHost(item.url),
-                                style = TextStyle(color = colors.secondary, fontSize = 12.sp),
-                            )
-                        }
-                    }
-                }
-                is StartPageContextTarget.Reading -> {
-                    val entry = target.item
-                    Column(
-                        modifier = Modifier
-                            .padding(14.dp)
-                            .width(260.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp),
-                    ) {
-                        BasicText(
-                            text = entry.title,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
-                            style = TextStyle(color = colors.ink, fontSize = 14.sp, fontWeight = FontWeight.SemiBold),
-                        )
-                        BasicText(
-                            text = BrowserUrlUtils.displayHost(entry.url),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            style = TextStyle(color = colors.secondary, fontSize = 12.sp),
-                        )
-                    }
-                }
-                null -> Unit
-            }
-        },
-    ) {
+    val startPageBody: @Composable () -> Unit = {
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .liquidKitBackdrop(startBackdrop)
+                .then(if (!isPreview) Modifier.liquidKitBackdrop(startBackdrop) else Modifier)
                 .background(bgBrush),
         )
         LazyColumn(
             state = listState,
+            userScrollEnabled = !isPreview,
             modifier = Modifier
                 .fillMaxSize()
-                .statusBarsPadding()
-                .displayCutoutPadding(),
+                .then(
+                    if (!isPreview) Modifier.statusBarsPadding().displayCutoutPadding() else Modifier,
+                ),
             horizontalAlignment = Alignment.CenterHorizontally,
-            contentPadding = PaddingValues(start = horizontalPad, end = horizontalPad, top = 14.dp + topExtraPadding, bottom = bottomClearance),
+            contentPadding = PaddingValues(
+                start = horizontalPad,
+                end = horizontalPad,
+                top = 14.dp + if (isPreview) 0.dp else topExtraPadding,
+                bottom = bottomClearance,
+            ),
             verticalArrangement = Arrangement.spacedBy(if (layoutProfile == BrowserLayoutProfile.PHONE_LANDSCAPE) 18.dp else 22.dp),
         ) {
         if (isPrivate) {
@@ -363,6 +307,7 @@ fun StartPage(
                     },
                     primaryInk = primaryInk,
                     secondaryInk = secondaryInk,
+                    interactive = !isPreview,
                     onAction = { state.showAllFavorites = !state.showAllFavorites },
                 )
 
@@ -421,6 +366,7 @@ fun StartPage(
                                             item = fav,
                                             primaryInk = primaryInk,
                                             menuState = contextMenuState,
+                                            interactive = !isPreview,
                                             onPrepareContext = { contextTarget = StartPageContextTarget.Favorite(fav) },
                                             onTap = { onOpenUrl(fav.url) },
                                         )
@@ -447,6 +393,7 @@ fun StartPage(
                     actionLabel = "详情",
                     primaryInk = primaryInk,
                     secondaryInk = secondaryInk,
+                    interactive = !isPreview,
                     onAction = onOpenPrivacyReport,
                 )
                 Row(
@@ -456,6 +403,7 @@ fun StartPage(
                         .background(cardBg)
                         .border(0.75.dp, cardBorder, StartPageCardShape)
                         .clickable(
+                            enabled = !isPreview,
                             interactionSource = remember { MutableInteractionSource() },
                             indication = null,
                             onClick = onOpenPrivacyReport,
@@ -502,6 +450,7 @@ fun StartPage(
                         actionLabel = "全部显示",
                         primaryInk = primaryInk,
                         secondaryInk = secondaryInk,
+                        interactive = !isPreview,
                         onAction = onOpenReadingList,
                     )
                     val readingCols = if (layoutProfile == BrowserLayoutProfile.TABLET_LANDSCAPE) 2 else 1
@@ -519,23 +468,30 @@ fun StartPage(
                                             .clip(StartPageCardShape)
                                             .background(cardBg)
                                             .border(0.75.dp, cardBorder, StartPageCardShape)
-                                            .pointerInput(entry.id) {
-                                                awaitPointerEventScope {
-                                                    while (true) {
-                                                        val ev = awaitPointerEvent(PointerEventPass.Initial)
-                                                        if (ev.changes.any { it.changedToDownIgnoreConsumed() }) {
+                                            .then(
+                                                if (isPreview) {
+                                                    Modifier
+                                                } else {
+                                                    Modifier
+                                                        .pointerInput(entry.id) {
+                                                            awaitPointerEventScope {
+                                                                while (true) {
+                                                                    val ev = awaitPointerEvent(PointerEventPass.Initial)
+                                                                    if (ev.changes.any { it.changedToDownIgnoreConsumed() }) {
+                                                                        contextTarget = StartPageContextTarget.Reading(entry)
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                        .liquidKitContextMenu(contextMenuState, sourceShape = StartPageCardShape) {
                                                             contextTarget = StartPageContextTarget.Reading(entry)
                                                         }
-                                                    }
-                                                }
-                                            }
-                                            .liquidKitContextMenu(contextMenuState, sourceShape = StartPageCardShape) {
-                                                contextTarget = StartPageContextTarget.Reading(entry)
-                                            }
-                                            .clickable(
-                                                interactionSource = remember { MutableInteractionSource() },
-                                                indication = null,
-                                            ) { onOpenUrl(entry.url) }
+                                                        .clickable(
+                                                            interactionSource = remember { MutableInteractionSource() },
+                                                            indication = null,
+                                                        ) { onOpenUrl(entry.url) }
+                                                },
+                                            )
                                             .padding(14.dp),
                                         verticalAlignment = Alignment.CenterVertically,
                                         horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -600,6 +556,7 @@ fun StartPage(
                     LiquidKitButton(
                         onClick = onOpenSettings,
                         backdrop = startBackdrop,
+                        isInteractive = !isPreview,
                         height = 40.dp,
                         contentPadding = PaddingValues(horizontal = 18.dp),
                     ) {
@@ -618,6 +575,85 @@ fun StartPage(
         }
         }
     }
+
+    if (isPreview) {
+        Box(modifier = modifier.fillMaxSize()) {
+            startPageBody()
+        }
+    } else {
+        LiquidKitContextMenuHost(
+            state = contextMenuState,
+            items = contextMenuItems,
+            colors = colors,
+            modifier = modifier.fillMaxSize(),
+            preview = {
+                when (val target = contextTarget) {
+                    is StartPageContextTarget.Favorite -> {
+                        val item = target.item
+                        Row(
+                            modifier = Modifier
+                                .padding(14.dp)
+                                .width(240.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(48.dp)
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(Color(item.colorArgb)),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                BasicText(
+                                    text = item.shortGlyph,
+                                    style = TextStyle(color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold),
+                                )
+                            }
+                            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                BasicText(
+                                    text = item.title,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    style = TextStyle(color = colors.ink, fontSize = 15.sp, fontWeight = FontWeight.SemiBold),
+                                )
+                                BasicText(
+                                    text = item.url,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    style = TextStyle(color = colors.secondary, fontSize = 12.sp),
+                                )
+                            }
+                        }
+                    }
+                    is StartPageContextTarget.Reading -> {
+                        val entry = target.item
+                        Column(
+                            modifier = Modifier
+                                .padding(14.dp)
+                                .width(260.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            BasicText(
+                                text = entry.title,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                                style = TextStyle(color = colors.ink, fontSize = 14.sp, fontWeight = FontWeight.SemiBold),
+                            )
+                            BasicText(
+                                text = BrowserUrlUtils.displayHost(entry.url),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                style = TextStyle(color = colors.secondary, fontSize = 12.sp),
+                            )
+                        }
+                    }
+                    null -> Unit
+                }
+            },
+        ) {
+            startPageBody()
+        }
+    }
 }
 
 @Composable
@@ -626,6 +662,7 @@ private fun SectionHeaderRow(
     actionLabel: String?,
     primaryInk: Color,
     secondaryInk: Color,
+    interactive: Boolean = true,
     onAction: () -> Unit,
 ) {
     Row(
@@ -639,7 +676,7 @@ private fun SectionHeaderRow(
             color = primaryInk,
         )
         if (actionLabel != null) {
-            LiquidKitPressButton(onClick = onAction) {
+            val rowContent: @Composable () -> Unit = {
                 Row(
                     modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically,
@@ -656,6 +693,11 @@ private fun SectionHeaderRow(
                     )
                 }
             }
+            if (interactive) {
+                LiquidKitPressButton(onClick = onAction) { rowContent() }
+            } else {
+                rowContent()
+            }
         }
     }
 }
@@ -665,6 +707,7 @@ private fun FavoriteTile(
     item: FavoriteItem,
     primaryInk: Color,
     menuState: io.liquidkit.LiquidKitMenuState,
+    interactive: Boolean = true,
     onPrepareContext: () -> Unit,
     onTap: () -> Unit,
 ) {
@@ -680,21 +723,28 @@ private fun FavoriteTile(
     Column(
         modifier = Modifier
             .clip(StartPageTileShape)
-            .pointerInput(item.id) {
-                awaitPointerEventScope {
-                    while (true) {
-                        val ev = awaitPointerEvent(PointerEventPass.Initial)
-                        if (ev.changes.any { it.changedToDownIgnoreConsumed() }) {
-                            onPrepareContext()
+            .then(
+                if (interactive) {
+                    Modifier
+                        .pointerInput(item.id) {
+                            awaitPointerEventScope {
+                                while (true) {
+                                    val ev = awaitPointerEvent(PointerEventPass.Initial)
+                                    if (ev.changes.any { it.changedToDownIgnoreConsumed() }) {
+                                        onPrepareContext()
+                                    }
+                                }
+                            }
                         }
-                    }
-                }
-            }
-            .liquidKitContextMenu(menuState, sourceShape = StartPageTileShape, prepare = onPrepareContext)
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-                onClick = onTap,
+                        .liquidKitContextMenu(menuState, sourceShape = StartPageTileShape, prepare = onPrepareContext)
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                            onClick = onTap,
+                        )
+                } else {
+                    Modifier
+                },
             )
             .padding(vertical = 4.dp, horizontal = 2.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
